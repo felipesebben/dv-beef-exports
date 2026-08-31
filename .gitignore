@@ -22,11 +22,16 @@ htmlcov/
 # Streamlit
 .streamlit/secrets.toml
 
-# Data (cached pulls / generated outputs — regenerated via the ingestion layer, not committed)
+# Data
+# Raw pulls are regenerable scratch — not committed.
 data/raw/*
-data/processed/*
 !data/raw/.gitkeep
+# The DuckDB file IS committed (see docs/decisions/0003) — small, narrow
+# NCM scope, doubles as our change history via git. Ignore everything
+# else generated into data/processed/.
+data/processed/*
 !data/processed/.gitkeep
+!data/processed/*.duckdb
 
 # Environment / secrets
 .env

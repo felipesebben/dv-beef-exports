@@ -18,7 +18,10 @@ can point us toward but not solve directly.
 ## Phase 1 — Ingestion
 - `POST /general` client against `api-comexstat.mdic.gov.br` (no auth),
   filtered to our beef NCM codes, full history (1997–present)
-- Local caching of raw pulls so we're not re-hitting the source on every run
+- Load into a DuckDB file (`data/processed/comexstat.duckdb`), tracked in
+  git — see `docs/decisions/0003-storage-and-automation-strategy.md`
+- Once the client + DuckDB loader exist: a scheduled, reconciliation-gated
+  refresh so this keeps running without manual intervention (same ADR)
 - See `docs/decisions/0002-comexstat-data-access-strategy.md` for why
   API-first over the bulk CSV files, and the exact NCM code scope
 
