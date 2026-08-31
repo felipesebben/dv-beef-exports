@@ -1,0 +1,44 @@
+[project]
+name = "dv-beef-exports"
+version = "0.1.0"
+description = "Business intelligence for Brazilian beef exports, built on ComexStat trade data"
+readme = "README.md"
+authors = [
+    { name = "Felipe Sebben", email = "felipesebben@yahoo.com.br" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "pandas>=3.0.5",
+    "requests>=2.34.2",
+    "streamlit>=1.62.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.7,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.6.2",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.16.5",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort (import sorting)
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=dv_beef_exports --cov-report=term-missing"
