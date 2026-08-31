@@ -16,9 +16,11 @@ can point us toward but not solve directly.
   "beef" (see `docs/decisions/`)
 
 ## Phase 1 — Ingestion
-- Client for pulling beef-relevant export data from ComexStat (by NCM code,
-  destination country, month, value, weight)
+- `POST /general` client against `api-comexstat.mdic.gov.br` (no auth),
+  filtered to our beef NCM codes, full history (1997–present)
 - Local caching of raw pulls so we're not re-hitting the source on every run
+- See `docs/decisions/0002-comexstat-data-access-strategy.md` for why
+  API-first over the bulk CSV files, and the exact NCM code scope
 
 ## Phase 2 — Analysis
 - Metrics answering the core questions:
