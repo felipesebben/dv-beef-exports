@@ -84,6 +84,8 @@ def _post_general(body: dict[str, Any]) -> list[dict[str, Any]]:
 
     if response.status_code == 403:
         raise ComexStatTransientError("ComexStat returned 403 (likely a soft Cloudflare block)")
+    if response.status_code == 429:
+        raise ComexStatTransientError("ComexStat returned 429 (rate limited)")
     if response.status_code >= 500:
         raise ComexStatTransientError(f"ComexStat returned {response.status_code}")
     if response.status_code >= 400:
