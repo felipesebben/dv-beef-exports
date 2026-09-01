@@ -66,6 +66,20 @@ def test_retries_on_soft_403_then_succeeds(requests_mock, monkeypatch) -> None:
     assert requests_mock.call_count == 2
 
 
+def test_retries_on_rate_limit_then_succeeds(requests_mock, monkeypatch) -> None:
+    monkeypatch.setattr(comexstat_client._post_general.retry, "wait", tenacity.wait_none())
+    rows = [{"country": "China"}]
+    requests_mock.post(
+        f"{BASE_URL}/general",
+        [{"status_code": 429}, {"json": _mock_response(rows), "status_code": 200}],
+    )
+
+    result = fetch_exports(["02023000"], "2024-01", "2024-03")
+
+    assert result == rows
+    assert requests_mock.call_count == 2
+
+
 def test_raises_transient_error_after_exhausting_retries(requests_mock, monkeypatch) -> None:
     monkeypatch.setattr(comexstat_client._post_general.retry, "wait", tenacity.wait_none())
     requests_mock.post(f"{BASE_URL}/general", status_code=403)
