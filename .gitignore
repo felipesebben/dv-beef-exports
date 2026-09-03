@@ -32,6 +32,11 @@ data/raw/*
 data/processed/*
 !data/processed/.gitkeep
 !data/processed/*.duckdb
+# Reference-only sample data (bulk CSVs, dimension tables) used to design
+# raw/staging/marts against real shapes — not part of the pipeline itself
+# (see docs/decisions/0002, API-first over bulk CSVs), no need to commit.
+data/samples/*/*
+!data/samples/*/.gitkeep
 
 # Environment / secrets
 .env
