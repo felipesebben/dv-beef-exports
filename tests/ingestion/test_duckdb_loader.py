@@ -4,11 +4,14 @@ from pathlib import Path
 
 import duckdb
 
+from dv_beef_exports.ingestion import duckdb_loader
 from dv_beef_exports.ingestion.duckdb_loader import (
     build_marts,
     build_staging,
     get_connection,
     ingest_raw,
+    refresh_dim_country,
+    refresh_ncm_hierarchy,
 )
 
 CHINA_FEB_2024 = {
@@ -157,4 +160,137 @@ def test_build_marts_converts_kg_to_metric_ton(tmp_path: Path) -> None:
 
     row = con.execute("SELECT kg, metric_ton FROM marts.exports").fetchone()
     assert row == (96055461, 96055461 / 1000.0)
+    con.close()
+
+
+def test_get_connection_reseed_preserves_hierarchy_columns(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.duckdb"
+    con = get_connection(db_path)
+    con.execute(
+        "UPDATE staging.dim_ncm SET sh6_code = '020230', unit = 'KILOGRAM' "
+        "WHERE ncm_code = '02023000'"
+    )
+    con.close()
+
+    # simulate a later, fresh connection (e.g. a new script run) — its
+    # dim_ncm upsert must not wipe out sh6_code/unit set by a previous
+    # refresh_ncm_hierarchy() call
+    con2 = get_connection(db_path)
+    row = con2.execute(
+        "SELECT sh6_code, unit FROM staging.dim_ncm WHERE ncm_code = '02023000'"
+    ).fetchone()
+    assert row == ("020230", "KILOGRAM")
+    con2.close()
+
+
+def test_refresh_ncm_hierarchy_dedupes_by_sh6_and_updates_dim_ncm(
+    tmp_path: Path, monkeypatch
+) -> None:
+    con = _connect(tmp_path)
+    fake_hierarchy = {
+        "02022010": {
+            "unit": "KILOGRAM",
+            "subHeadingCode": "020220",
+            "subHeading": "Other cuts with bone in",
+            "headingCode": "0202",
+            "heading": "Meat of bovine animals, frozen",
+            "chapterCode": "02",
+            "chapter": "Meat and edible meat offal",
+        },
+        "02022020": {
+            "unit": "KILOGRAM",
+            "subHeadingCode": "020220",
+            "subHeading": "Other cuts with bone in",
+            "headingCode": "0202",
+            "heading": "Meat of bovine animals, frozen",
+            "chapterCode": "02",
+            "chapter": "Meat and edible meat offal",
+        },
+        "02023000": {
+            "unit": "KILOGRAM",
+            "subHeadingCode": "020230",
+            "subHeading": "Frozen, boneless meat of bovine animals",
+            "headingCode": "0202",
+            "heading": "Meat of bovine animals, frozen",
+            "chapterCode": "02",
+            "chapter": "Meat and edible meat offal",
+        },
+    }
+    monkeypatch.setattr(
+        duckdb_loader,
+        "fetch_ncm_hierarchy",
+        lambda code, language="en": fake_hierarchy.get(code),
+    )
+
+    sh6_count = refresh_ncm_hierarchy(con)
+
+    # two of the three faked codes share sh6 "020220" -> deduped to 2 groups
+    assert sh6_count == 2
+    hierarchy_row = con.execute(
+        "SELECT sh6_name, chapter_code FROM staging.dim_ncm_hierarchy WHERE sh6_code = '020220'"
+    ).fetchone()
+    assert hierarchy_row == ("Other cuts with bone in", "02")
+
+    dim_ncm_row = con.execute(
+        "SELECT sh6_code, unit FROM staging.dim_ncm WHERE ncm_code = '02022010'"
+    ).fetchone()
+    assert dim_ncm_row == ("020220", "KILOGRAM")
+
+    # a tracked code with no fake data (e.g. an offal code) is left null,
+    # not an error — fetch_ncm_hierarchy() returning None is expected
+    unmapped_row = con.execute(
+        "SELECT sh6_code, unit FROM staging.dim_ncm WHERE ncm_code = '02062100'"
+    ).fetchone()
+    assert unmapped_row == (None, None)
+    con.close()
+
+
+def test_refresh_dim_country_populates_all_three_tables(tmp_path: Path, monkeypatch) -> None:
+    con = _connect(tmp_path)
+    monkeypatch.setattr(
+        duckdb_loader,
+        "fetch_countries",
+        lambda language="en": [
+            {"id": "105", "text": "Brazil"},
+            {"id": "160", "text": "\nChina"},
+        ],
+    )
+    monkeypatch.setattr(
+        duckdb_loader,
+        "fetch_economic_blocks",
+        lambda language="en": [
+            {"id": "48", "text": "South America"},
+            {"id": "111", "text": "Southern Common Market (MERCOSUL)"},
+        ],
+    )
+    monkeypatch.setattr(
+        duckdb_loader,
+        "fetch_country_blocs",
+        lambda language="en": [
+            {
+                "coCountry": "063",
+                "economicBlock": "South America",
+                "coBlock": "48",
+                "country": "Argentina",
+            },
+            {
+                "coCountry": "063",
+                "economicBlock": "Southern Common Market (MERCOSUL)",
+                "coBlock": "111",
+                "country": "Argentina",
+            },
+        ],
+    )
+
+    refresh_dim_country(con)
+
+    china_name = con.execute(
+        "SELECT name FROM staging.dim_country WHERE co_pais = '160'"
+    ).fetchone()[0]
+    assert china_name == "China"  # leading whitespace stripped
+
+    bloc_count = con.execute(
+        "SELECT count(*) FROM staging.bridge_country_bloc WHERE co_pais = '063'"
+    ).fetchone()[0]
+    assert bloc_count == 2  # Argentina: in both a region and a trade bloc
     con.close()

@@ -7,7 +7,11 @@ from dv_beef_exports.ingestion.comexstat_client import (
     BASE_URL,
     ComexStatError,
     ComexStatTransientError,
+    fetch_countries,
+    fetch_country_blocs,
+    fetch_economic_blocks,
     fetch_exports,
+    fetch_ncm_hierarchy,
 )
 
 
@@ -113,3 +117,79 @@ def test_raises_comexstat_error_on_unexpected_response_shape(requests_mock) -> N
         raise AssertionError("expected ComexStatError")
     except ComexStatError:
         pass
+
+
+def test_fetch_countries_sends_expected_request(requests_mock) -> None:
+    rows = [{"id": "105", "text": "Brazil"}]
+    requests_mock.get(f"{BASE_URL}/tables/countries", json=_mock_response(rows))
+
+    result = fetch_countries()
+
+    assert result == rows
+    request = requests_mock.last_request
+    assert request.qs["language"] == ["en"]
+    assert request.headers["Referer"] == f"{BASE_URL}/docs"
+
+
+def test_fetch_economic_blocks_sends_expected_request(requests_mock) -> None:
+    rows = [{"id": "111", "text": "Southern Common Market (MERCOSUL)"}]
+    requests_mock.get(f"{BASE_URL}/tables/economic-blocks", json=_mock_response(rows))
+
+    result = fetch_economic_blocks()
+
+    assert result == rows
+    assert "add" not in requests_mock.last_request.qs
+
+
+def test_fetch_country_blocs_includes_add_country_param(requests_mock) -> None:
+    rows = [
+        {
+            "economicBlock": "Southern Common Market (MERCOSUL)",
+            "country": "Paraguay",
+            "coBlock": "111",
+            "coCountry": "586",
+        }
+    ]
+    requests_mock.get(f"{BASE_URL}/tables/economic-blocks", json=_mock_response(rows))
+
+    result = fetch_country_blocs()
+
+    assert result == rows
+    assert requests_mock.last_request.qs["add"] == ["country"]
+
+
+def test_fetch_ncm_hierarchy_filters_to_exact_code_match(requests_mock) -> None:
+    rows = [
+        {"coNcm": "02023000", "subHeadingCode": "020230", "unit": "KILOGRAM"},
+        {"coNcm": "02021000", "subHeadingCode": "020210", "unit": "KILOGRAM"},
+    ]
+    requests_mock.get(f"{BASE_URL}/tables/ncm", json=_mock_response(rows))
+
+    result = fetch_ncm_hierarchy("02023000")
+
+    assert result == rows[0]
+    request = requests_mock.last_request
+    assert request.qs["add"] == ["sh"]
+    assert request.qs["search"] == ["02023000"]
+
+
+def test_fetch_ncm_hierarchy_returns_none_when_not_found(requests_mock) -> None:
+    requests_mock.get(f"{BASE_URL}/tables/ncm", json=_mock_response([]))
+
+    result = fetch_ncm_hierarchy("99999999")
+
+    assert result is None
+
+
+def test_get_tables_retries_on_rate_limit_then_succeeds(requests_mock, monkeypatch) -> None:
+    monkeypatch.setattr(comexstat_client._get_tables.retry, "wait", tenacity.wait_none())
+    rows = [{"id": "105", "text": "Brazil"}]
+    requests_mock.get(
+        f"{BASE_URL}/tables/countries",
+        [{"status_code": 429}, {"json": _mock_response(rows), "status_code": 200}],
+    )
+
+    result = fetch_countries()
+
+    assert result == rows
+    assert requests_mock.call_count == 2
