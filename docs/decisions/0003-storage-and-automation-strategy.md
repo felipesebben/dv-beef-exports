@@ -49,3 +49,5 @@ loader exist — not before.
 
 ## Status
 Accepted, 2026-08-31.
+
+See `docs/comexstat-api-reference.md` for the confirmed `/general/dates/updated` params (none) and caveats (response body shape isn't documented in the spec — confirm with a live call before wiring the automation step).
