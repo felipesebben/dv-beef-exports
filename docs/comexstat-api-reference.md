@@ -17,8 +17,9 @@ once you're past that.
 
 **Spec caveat**: every endpoint below documents its request params, but
 none document a response body schema or example (all just say "200
-OK"). Field names in actual responses still need confirming against a
-live call — this doc removes guessing on *inputs*, not response shape.
+OK"). Response shapes marked "confirmed" below came from actual live
+calls (2026-09-03), not the spec — everything else is still unconfirmed
+guessing on shape, even where the params are solid.
 
 ## `/general/*` — the endpoint we use
 
@@ -57,23 +58,50 @@ live call — this doc removes guessing on *inputs*, not response shape.
 
 ## `/tables/*` — dimension data, live from the API
 
-Confirms `docs/decisions/0004-medallion-data-layering.md`'s deferred
-dimension tables can be sourced live from the API itself, not only from
-the manually-uploaded snapshot in `data/samples/dimensions/` (bulk
-Excel/CSV exports of the same underlying data):
+Sourced live from the API for `staging.dim_ncm_hierarchy`,
+`staging.dim_country`, `staging.dim_economic_bloc`, and
+`staging.bridge_country_bloc` (`duckdb_loader.refresh_ncm_hierarchy()` /
+`refresh_dim_country()`) — **but the live shapes turned out thinner than
+the manually-uploaded snapshot in `data/samples/dimensions/`** (no ISO
+alpha/numeric codes anywhere, no "Section" level above chapter). That
+workbook looks like a separate, richer downloadable product; these
+endpoints read more like lookup tables for the ComexStat query UI's
+filter dropdowns.
 
-- **`GET /tables/countries`** — country code + description table.
-  `search` param (substring match, e.g. `"br"`).
-- **`GET /tables/countries/{id}`** — single country by code.
-- **`GET /tables/economic-blocks`** — bloc code + description.
-  `add=country` returns member countries inline; `language`; `search`.
-- **`GET /tables/ncm`** — NCM code + description. Paginated
-  (`page`/`perPage`); `search`; `add=sh|cuci|cgce` joins in the
-  Harmonized System / CUCI / CGCE classification for each NCM.
-- **`GET /tables/ncm/{coNcm}`** — single NCM by code.
-- **`GET /tables/hs`** — Harmonized System (SH) table — the chapter/
-  heading/subheading hierarchy. Paginated; `language`; `add=ncm` joins
-  NCM codes under each SH entry.
+- **`GET /tables/countries`** — `search` param (substring match, e.g.
+  `"br"`). **Confirmed response**: `{"data": {"list": [{"id": "160",
+  "text": "China"}], "count": 1}}` — just a code + display name, no ISO
+  codes. Some entries have leading whitespace in `text` (needs
+  stripping). 281 rows total, returned in one call (no pagination
+  params on this endpoint).
+- **`GET /tables/countries/{id}`** — single country by code, same thin
+  shape.
+- **`GET /tables/economic-blocks`** — `language`, `search`.
+  **Confirmed** (no `add`): `{"id": "111", "text": "Southern Common
+  Market (MERCOSUL)"}` per row, 12 blocs total, one call.
+  **Confirmed** (`add=country`): flattened membership rows —
+  `{"economicBlock": ..., "country": ..., "coBlock": ..., "coCountry":
+  ...}`, one row per (bloc, member country) pair, 322 rows total in one
+  call. **A country can belong to more than one bloc** (e.g. Argentina
+  appears under both "South America" and "Southern Common Market
+  (MERCOSUL)") — this is a many-to-many bridge, not a lookup.
+- **`GET /tables/ncm`** — paginated (`page`/`perPage`), `search`,
+  `add=sh|cuci|cgce`. **Confirmed** (`add=sh`, `search=<code>`):
+  `{"coNcm": ..., "noNCM": ..., "unit": "KILOGRAM", "subHeadingCode":
+  ..., "subHeading": ..., "headingCode": ..., "heading": ...,
+  "chapterCode": ..., "chapter": ...}` — the NCM's full SH6/SH4/chapter
+  hierarchy plus its statistical unit, in one call per code. `search`
+  matched cleanly on an exact code in testing, but is documented as a
+  substring match — `duckdb_loader.refresh_ncm_hierarchy()` filters
+  results to an exact `coNcm` match rather than trusting the first hit.
+- **`GET /tables/ncm/{coNcm}`** — single NCM by code. **Confirmed**:
+  thin — just `{"id": ..., "text": ...}`, no hierarchy at all. Use
+  `/tables/ncm?add=sh&search=<code>` instead (above) if the hierarchy is
+  needed, which is why this project does.
+- **`GET /tables/hs`** — Harmonized System (SH) table, paginated
+  (6620 rows total), `add=ncm`. **Not used** — redundant for our scope,
+  since `/tables/ncm?add=sh` already gives the hierarchy per NCM code we
+  actually track, one call each, no pagination needed.
 
 Not currently used, listed for completeness: `/cities/*` and
 `/historical-data/*` mirror `/general/*`'s shape (dates/updated,

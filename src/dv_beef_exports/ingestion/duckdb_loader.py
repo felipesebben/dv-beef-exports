@@ -23,6 +23,12 @@ from typing import Any
 
 import duckdb
 
+from dv_beef_exports.ingestion.comexstat_client import (
+    fetch_countries,
+    fetch_country_blocs,
+    fetch_economic_blocks,
+    fetch_ncm_hierarchy,
+)
 from dv_beef_exports.ingestion.ncm_codes import BEEF_NCM_CODES
 
 DB_PATH = Path("data/processed/comexstat.duckdb")
@@ -56,17 +62,64 @@ _INSERT_RAW_SQL = """
 """
 
 _CREATE_DIM_NCM_SQL = """
-    CREATE OR REPLACE TABLE staging.dim_ncm (
+    CREATE TABLE IF NOT EXISTS staging.dim_ncm (
         ncm_code       VARCHAR NOT NULL PRIMARY KEY,
         description_pt VARCHAR NOT NULL,
         description_en VARCHAR NOT NULL,
-        category       VARCHAR NOT NULL
+        category       VARCHAR NOT NULL,
+        sh6_code       VARCHAR,
+        unit           VARCHAR
     )
 """
 
-_INSERT_DIM_NCM_SQL = """
+_UPSERT_DIM_NCM_SQL = """
     INSERT INTO staging.dim_ncm (ncm_code, description_pt, description_en, category)
     VALUES (?, ?, ?, ?)
+    ON CONFLICT (ncm_code) DO UPDATE SET
+        description_pt = EXCLUDED.description_pt,
+        description_en = EXCLUDED.description_en,
+        category = EXCLUDED.category
+"""
+
+_CREATE_DIM_NCM_HIERARCHY_SQL = """
+    CREATE OR REPLACE TABLE staging.dim_ncm_hierarchy (
+        sh6_code     VARCHAR NOT NULL PRIMARY KEY,
+        sh6_name     VARCHAR NOT NULL,
+        sh4_code     VARCHAR NOT NULL,
+        sh4_name     VARCHAR NOT NULL,
+        chapter_code VARCHAR NOT NULL,
+        chapter_name VARCHAR NOT NULL
+    )
+"""
+
+_INSERT_DIM_NCM_HIERARCHY_SQL = """
+    INSERT INTO staging.dim_ncm_hierarchy VALUES (?, ?, ?, ?, ?, ?)
+"""
+
+_UPDATE_DIM_NCM_SH6_SQL = """
+    UPDATE staging.dim_ncm SET sh6_code = ?, unit = ? WHERE ncm_code = ?
+"""
+
+_CREATE_DIM_COUNTRY_SQL = """
+    CREATE OR REPLACE TABLE staging.dim_country (
+        co_pais VARCHAR NOT NULL PRIMARY KEY,
+        name    VARCHAR NOT NULL
+    )
+"""
+
+_CREATE_DIM_ECONOMIC_BLOC_SQL = """
+    CREATE OR REPLACE TABLE staging.dim_economic_bloc (
+        co_bloc VARCHAR NOT NULL PRIMARY KEY,
+        name    VARCHAR NOT NULL
+    )
+"""
+
+_CREATE_BRIDGE_COUNTRY_BLOC_SQL = """
+    CREATE OR REPLACE TABLE staging.bridge_country_bloc (
+        co_pais VARCHAR NOT NULL,
+        co_bloc VARCHAR NOT NULL,
+        PRIMARY KEY (co_pais, co_bloc)
+    )
 """
 
 _BUILD_STAGING_SQL = """
@@ -107,10 +160,12 @@ _BUILD_MARTS_SQL = """
 
 def get_connection(db_path: Path = DB_PATH) -> duckdb.DuckDBPyConnection:
     """Open the tracked DuckDB file, creating the raw/staging/marts schemas,
-    `raw.exports`, and `staging.dim` if needed. `staging.dim_ncm` is
-    reseeded from ncm_codes.py on every call (cheap – 11 rows– and keeps
-    it always in sync with the source instead of needing a separate
-    migration step whenever the reference list changes).
+    `raw.exports`, and `staging.dim_ncm` if needed. `staging.dim_ncm` is
+    upserted from ncm_codes.py on every call (cheap – 11 rows – and keeps
+    its code/description/category columns always in sync with the
+    source). This only touches those columns — `sh6_code`/`unit`, set by
+    refresh_ncm_hierarchy(), are left alone so a fresh connection doesn't
+    wipe out prior enrichment.
 
     `staging.exports` and `marts.exports` are NOT created here – they only
     exist once build_staging()/build_marts() have run at least once. This
@@ -132,7 +187,7 @@ def _seed_dim_ncm(con: duckdb.DuckDBPyConnection) -> None:
     records = [
         (ncm.code, ncm.description_pt, ncm.description_en, ncm.category) for ncm in BEEF_NCM_CODES
     ]
-    con.executemany(_INSERT_DIM_NCM_SQL, records)
+    con.executemany(_UPSERT_DIM_NCM_SQL, records)
 
 
 def ingest_raw(
@@ -227,3 +282,75 @@ def build_marts(con: duckdb.DuckDBPyConnection) -> int:
     """
     con.execute(_BUILD_MARTS_SQL)
     return con.execute("SELECT count(*) FROM marts.exports").fetchone()[0]
+
+
+def refresh_ncm_hierarchy(con: duckdb.DuckDBPyConnection) -> int:
+    """
+    Refresh staging.dim_ncm_hierarchy and staging.dim_ncm's sh6_code/unit
+    columns from ComexStat's /tables/ncm (add=sh) — one API call per
+    tracked NCM code. Explicit/occasional, not run on every
+    get_connection(): dimension data changes far less often than trade
+    data (see docs/decisions/0004), and this shouldn't couple opening a
+    connection to network availability.
+
+    Deduplicates by sh6_code: several of our NCM codes share the same SH6
+    (e.g. the bone-in cuts), so dim_ncm_hierarchy stores each SH6 group
+    once rather than repeating its chapter/heading text per NCM code.
+
+    Returns the number of distinct SH6 groups stored.
+    """
+    con.execute(_CREATE_DIM_NCM_HIERARCHY_SQL)
+
+    hierarchy_by_sh6: dict[str, tuple[Any, ...]] = {}
+    for ncm in BEEF_NCM_CODES:
+        hierarchy = fetch_ncm_hierarchy(ncm.code)
+        if hierarchy is None:
+            continue
+
+        sh6_code = hierarchy["subHeadingCode"]
+        hierarchy_by_sh6[sh6_code] = (
+            sh6_code,
+            hierarchy["subHeading"],
+            hierarchy["headingCode"],
+            hierarchy["heading"],
+            hierarchy["chapterCode"],
+            hierarchy["chapter"],
+        )
+        con.execute(_UPDATE_DIM_NCM_SH6_SQL, [sh6_code, hierarchy["unit"], ncm.code])
+
+    con.executemany(_INSERT_DIM_NCM_HIERARCHY_SQL, list(hierarchy_by_sh6.values()))
+    return len(hierarchy_by_sh6)
+
+
+def refresh_dim_country(con: duckdb.DuckDBPyConnection) -> None:
+    """
+    Refresh staging.dim_country, staging.dim_economic_bloc, and
+    staging.bridge_country_bloc from ComexStat's /tables/countries and
+    /tables/economic-blocks. Explicit/occasional, not run on every
+    get_connection() (see refresh_ncm_hierarchy()).
+
+    A country can belong to more than one bloc (e.g. a region like "South
+    America" and a trade bloc like "MERCOSUL" at once), hence the
+    separate bridge table rather than one bloc column on dim_country.
+    """
+    con.execute(_CREATE_DIM_COUNTRY_SQL)
+    con.execute(_CREATE_DIM_ECONOMIC_BLOC_SQL)
+    con.execute(_CREATE_BRIDGE_COUNTRY_BLOC_SQL)
+
+    countries = fetch_countries()
+    con.executemany(
+        "INSERT INTO staging.dim_country VALUES (?, ?)",
+        [(row["id"], row["text"].strip()) for row in countries],
+    )
+
+    blocs = fetch_economic_blocks()
+    con.executemany(
+        "INSERT INTO staging.dim_economic_bloc VALUES (?, ?)",
+        [(row["id"], row["text"].strip()) for row in blocs],
+    )
+
+    memberships = fetch_country_blocs()
+    con.executemany(
+        "INSERT INTO staging.bridge_country_bloc VALUES (?, ?)",
+        [(row["coCountry"], row["coBlock"]) for row in memberships],
+    )
