@@ -94,7 +94,7 @@ def test_raises_transient_error_after_exhausting_retries(requests_mock, monkeypa
     except ComexStatTransientError:
         pass
 
-    assert requests_mock.call_count == 4
+    assert requests_mock.call_count == comexstat_client.RETRY_ATTEMPTS
 
 
 def test_raises_comexstat_error_on_bad_request_without_retrying(requests_mock) -> None:
