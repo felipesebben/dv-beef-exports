@@ -15,6 +15,10 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 BASE_URL = "https://api-comexstat.mdic.gov.br"
 TIMEOUT_SECONDS = 30
+RETRY_ATTEMPTS = 6
+RETRY_WAIT_MULTIPLIER = 2  # ComexStat's own message says to retry in 10secs
+RETRY_WAIT_MIN_SECONDS = 10
+RETRY_WAIT_MAX_SECONDS = 60
 
 
 class ComexStatError(Exception):
@@ -146,8 +150,10 @@ def _handle_response(response: requests.Response) -> list[dict[str, Any]]:
 
 @retry(
     retry=retry_if_exception_type(ComexStatTransientError),
-    stop=stop_after_attempt(4),
-    wait=wait_exponential(multiplier=2, min=2, max=30),
+    stop=stop_after_attempt(RETRY_ATTEMPTS),
+    wait=wait_exponential(
+        multiplier=RETRY_WAIT_MULTIPLIER, min=RETRY_WAIT_MIN_SECONDS, max=RETRY_WAIT_MAX_SECONDS
+    ),
     reraise=True,
 )
 def _post_general(body: dict[str, Any]) -> list[dict[str, Any]]:
@@ -166,8 +172,10 @@ def _post_general(body: dict[str, Any]) -> list[dict[str, Any]]:
 
 @retry(
     retry=retry_if_exception_type(ComexStatTransientError),
-    stop=stop_after_attempt(4),
-    wait=wait_exponential(multiplier=2, min=2, max=30),
+    stop=stop_after_attempt(RETRY_ATTEMPTS),
+    wait=wait_exponential(
+        multiplier=RETRY_WAIT_MULTIPLIER, min=RETRY_WAIT_MIN_SECONDS, max=RETRY_WAIT_MAX_SECONDS
+    ),
     reraise=True,
 )
 def _get_tables(path: str, params: dict[str, Any]) -> list[dict[str, Any]]:
