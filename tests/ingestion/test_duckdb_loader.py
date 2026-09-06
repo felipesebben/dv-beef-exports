@@ -294,3 +294,153 @@ def test_refresh_dim_country_populates_all_three_tables(tmp_path: Path, monkeypa
     ).fetchone()[0]
     assert bloc_count == 2  # Argentina: in both a region and a trade bloc
     con.close()
+
+
+def test_build_staging_joins_hierarchy_and_country_when_populated(
+    tmp_path: Path, monkeypatch
+) -> None:
+    con = _connect(tmp_path)
+    monkeypatch.setattr(
+        duckdb_loader,
+        "fetch_ncm_hierarchy",
+        lambda code, language="en": (
+            {
+                "unit": "KILOGRAM",
+                "subHeadingCode": "020230",
+                "subHeading": "Frozen, boneless meat of bovine animals",
+                "headingCode": "0202",
+                "heading": "Meat of bovine animals, frozen",
+                "chapterCode": "02",
+                "chapter": "Meat and edible meat offal",
+            }
+            if code == "02023000"
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        duckdb_loader, "fetch_countries", lambda language="en": [{"id": "160", "text": "China"}]
+    )
+    monkeypatch.setattr(duckdb_loader, "fetch_economic_blocks", lambda language="en": [])
+    monkeypatch.setattr(duckdb_loader, "fetch_country_blocs", lambda language="en": [])
+    refresh_ncm_hierarchy(con)
+    refresh_dim_country(con)
+    ingest_raw(con, [CHINA_FEB_2024], ["02023000"], "2024-01", "2024-03")
+
+    build_staging(con)
+
+    row = con.execute(
+        "SELECT sh6_code, sh6_name, chapter_code, chapter_name, co_pais "
+        "FROM staging.exports WHERE ncm_code = '02023000'"
+    ).fetchone()
+    assert row == (
+        "020230",
+        "Frozen, boneless meat of bovine animals",
+        "02",
+        "Meat and edible meat offal",
+        "160",
+    )
+    con.close()
+
+
+def test_build_staging_leaves_new_columns_null_when_dimensions_not_refreshed(
+    tmp_path: Path,
+) -> None:
+    con = _connect(tmp_path)
+    ingest_raw(con, [CHINA_FEB_2024], ["02023000"], "2024-01", "2024-03")
+
+    build_staging(con)
+
+    row = con.execute(
+        "SELECT sh6_code, chapter_code, co_pais FROM staging.exports WHERE ncm_code = '02023000'"
+    ).fetchone()
+    assert row == (None, None, None)  # not populated yet, but doesn't error either
+    con.close()
+
+
+def test_build_marts_splits_region_and_trade_bloc_without_fanout(
+    tmp_path: Path, monkeypatch
+) -> None:
+    con = _connect(tmp_path)
+    monkeypatch.setattr(
+        duckdb_loader, "fetch_countries", lambda language="en": [{"id": "063", "text": "Argentina"}]
+    )
+    monkeypatch.setattr(
+        duckdb_loader,
+        "fetch_economic_blocks",
+        lambda language="en": [
+            {"id": "48", "text": "South America"},
+            {"id": "111", "text": "Southern Common Market (MERCOSUL)"},
+        ],
+    )
+    monkeypatch.setattr(
+        duckdb_loader,
+        "fetch_country_blocs",
+        lambda language="en": [
+            {
+                "coCountry": "063",
+                "economicBlock": "South America",
+                "coBlock": "48",
+                "country": "Argentina",
+            },
+            {
+                "coCountry": "063",
+                "economicBlock": "Southern Common Market (MERCOSUL)",
+                "coBlock": "111",
+                "country": "Argentina",
+            },
+        ],
+    )
+    refresh_dim_country(con)
+    argentina_row = {**CHINA_FEB_2024, "country": "Argentina"}
+    ingest_raw(con, [argentina_row], ["02023000"], "2024-01", "2024-03")
+    build_staging(con)
+
+    build_marts(con)
+
+    # A country in both a region AND a trade bloc must still produce exactly
+    # one fact row, not one per bloc membership — regression test for a real
+    # bug: joining the bridge table twice (once per bloc type) without
+    # pre-aggregating to one row per country fanned every dual-membership
+    # country's rows out 2x-4x.
+    rows = con.execute(
+        "SELECT region, trade_bloc FROM marts.exports WHERE country = 'Argentina'"
+    ).fetchall()
+    assert rows == [("South America", "Southern Common Market (MERCOSUL)")]
+    con.close()
+
+
+def test_build_marts_country_with_only_a_region_has_null_trade_bloc(
+    tmp_path: Path, monkeypatch
+) -> None:
+    con = _connect(tmp_path)
+    monkeypatch.setattr(
+        duckdb_loader, "fetch_countries", lambda language="en": [{"id": "160", "text": "China"}]
+    )
+    monkeypatch.setattr(
+        duckdb_loader,
+        "fetch_economic_blocks",
+        lambda language="en": [{"id": "39", "text": "Asia (minus MIDDLE EAST)"}],
+    )
+    monkeypatch.setattr(
+        duckdb_loader,
+        "fetch_country_blocs",
+        lambda language="en": [
+            {
+                "coCountry": "160",
+                "economicBlock": "Asia (minus MIDDLE EAST)",
+                "coBlock": "39",
+                "country": "China",
+            }
+        ],
+    )
+    refresh_dim_country(con)
+    ingest_raw(con, [CHINA_FEB_2024], ["02023000"], "2024-01", "2024-03")
+    build_staging(con)
+
+    build_marts(con)
+
+    row = con.execute(
+        "SELECT region, trade_bloc FROM marts.exports WHERE country = 'China'"
+    ).fetchone()
+    assert row == ("Asia (minus MIDDLE EAST)", None)
+    con.close()
