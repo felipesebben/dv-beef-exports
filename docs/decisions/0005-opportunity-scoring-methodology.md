@@ -57,7 +57,9 @@ This one fit produces both a growth number and its consistency signal:
 - `trend_r2` — how well a single steady exponential trend explains the
   actual yearly values (0–1). A steady climber scores near 1; a spike or
   sawtooth scores low. This is "consistent, noticeable evidence" made
-  numeric, and feeds confidence, not the score.
+  numeric, and feeds confidence, not the score. **Superseded by the
+  2026-09-12 amendment below — use adjusted R², not raw R², and require
+  `years_active >= 4`.**
 
 Fitting in log-space (rather than year-over-year % deltas) is deliberate:
 trade volume growth is naturally multiplicative, and a single regression
@@ -68,6 +70,8 @@ noisy single-year deltas.
 1. **Coverage** — `years_active / window_size`, capped at 1. Penalizes
    sparse/gappy history.
 2. **Trend consistency** — `trend_r2` directly, from the fit above.
+   **Superseded — see the 2026-09-12 amendment: use adjusted R², not raw
+   R², and require `years_active >= 4`.**
 3. **Volume confidence** — `total_fob_usd / (total_fob_usd + K)`, a
    Bayesian-shrinkage shape (same family as a Wilson/IMDB weighted-rating
    adjustment): approaches 1 as volume grows, sits at 0.5 when volume
@@ -136,5 +140,53 @@ blocker to building the first version.
   changes, the sum-then-divide rule stays independent of this ADR and
   doesn't need revisiting here.
 
+## Amendment (2026-09-12): raw R² is unreliable at low sample sizes
+
+Found while working the methodology against real data in
+`notebooks/opportunity_scoring_eda.ipynb`, one product (frozen tongues,
+NCM `02062100`) ranked across every importing country. The top of the
+ranked-by-`opportunity_score` table was dominated by countries showing
+implausible growth rates — Jordan at 1,432 (i.e. ~143,000%/year), Chile at
+117, Sierra Leone at 82 — burying genuinely promising, better-supported
+candidates (Cambodia, the Philippines) further down.
+
+Root cause: every one of those inflated rows had `years_active = 2`, and
+every one showed `trend_r2 = 1.000000` exactly. This isn't a data
+coincidence — **a straight line through exactly 2 points fits perfectly by
+mathematical necessity**, so `regr_r2` is guaranteed to equal 1.0 at `n=2`
+regardless of what those two points are. Raw R² only starts carrying real
+information once there are more data points than the model has parameters
+to fit (a line has 2: slope + intercept), so it was giving its strongest
+"trust me" signal exactly where there was the least reason to.
+
+**Fix:**
+1. Require **`years_active >= 4`** before a (product_level, geo_level)
+   group gets a score or confidence at all — below that, adjusted R² is
+   either undefined (`n=2`) or too unstable to trust (`n=3`).
+2. Replace `trend_r2` with **adjusted R²** in the confidence formula,
+   everywhere the original Decisions section above said `trend_r2`:
+
+   ```
+   trend_r2_adj = 1 - (1 - trend_r2) * (years_active - 1) / (years_active - 2)
+   ```
+
+   clipped to `[0, 1]` (a genuinely poor fit can push the raw computation
+   negative — treated as zero confidence, not a negative one). Adjusted R²
+   is the standard statistical tool for exactly this problem: it explicitly
+   penalizes R² for how few data points support it, converging toward raw
+   R² as `years_active` grows. Sanity check: adjusted R² must never exceed
+   raw R² for `years_active > 2` — if it ever does in an implementation,
+   that implementation has a bug (this is how the fix's first, buggy
+   notebook attempt was itself caught — a dropped `(n - 1)` factor produced
+   adjusted values *higher* than raw R², which is mathematically
+   impossible).
+
+Confirmed against real output after the fix: Cambodia (`years_active=4`,
+`trend_r2=0.957`) → `trend_r2_adj=0.936`, confidence 0.70; the Philippines
+(`years_active=7`, `trend_r2=0.670`) → `trend_r2_adj=0.604`, confidence
+0.74 — both now correctly surface near the top of the ranking, ahead of
+the `years_active=2` artifacts, which are excluded entirely.
+
 ## Status
-Accepted, 2026-09-12.
+Accepted, 2026-09-12. Amended 2026-09-12 (adjusted R² + `years_active >= 4`
+floor, above).
