@@ -17,13 +17,14 @@ uv run pytest tests/ingestion/test_duckdb_loader.py::test_ingest_raw_appends_row
 uv run ruff check .             # lint
 uv run ruff format .            # format
 uv run pre-commit install       # one-time: run ruff on every commit
+uv run streamlit run src/dv_beef_exports/app/main.py  # run the Streamlit prototype (Phase 3)
 ```
 
 CI (`.github/workflows/ci.yml`) runs `ruff check` + `pytest` on every PR into `main`; both must pass before merge.
 
 ## Architecture
 
-`src/dv_beef_exports/` — `ingestion/` (pulling and loading ComexStat data), `analysis/` (Phase 2, not started), `app/` (Streamlit prototype, Phase 3, not started).
+`src/dv_beef_exports/` — `ingestion/` (pulling and loading ComexStat data), `analysis/` (Phase 2 opportunity scoring, see `docs/decisions/0005-opportunity-scoring-methodology.md`), `app/` (Streamlit prototype, Phase 3, surfaces `analysis/`).
 
 **Ingestion pipeline** (`ingestion/`):
 - `ncm_codes.py` — the 11 beef NCM codes this pipeline tracks, each tagged with a `category` (`frozen`, `offal`, `salted_dried`, `processed`). Fresh/chilled beef and live cattle/hides are deliberately excluded — different commodities/product lines (see ADR 0002).
@@ -38,7 +39,13 @@ CI (`.github/workflows/ci.yml`) runs `ruff check` + `pytest` on every PR into `m
   - `marts.exports` — rebuilt from `staging` by `build_marts()`, adds `kg / 1000.0 AS metric_ton`. `category` stays a plain column, not rolled up across categories — cross-category weight comparability (e.g. canned/processed beef's net weight isn't directly comparable to a frozen cut's) stays an open, query-time question rather than baked into the schema.
   - `staging.exports`/`marts.exports` don't exist until their build function has run at least once — querying them before that fails loudly rather than silently returning zero rows.
 
-The full historical backfill (all 11 NCM codes × 1997–present) is next, now that both the loader restructure and the dimension tables are in place.
+The tracked `comexstat.duckdb` holds the full backfill: all 11 NCM codes × 1997–present, 72,724 rows in `staging.exports`/`marts.exports`.
+
+**Analysis** (`analysis/`):
+- `opportunity_scoring.py` — `rank_markets()` (fix a product, rank geographies) and `rank_products()` (fix a geography, rank products) are thin wrappers over one shared `_score_opportunities()` query, parametrized by `product_level`/`geo_level` (`ncm_code`/`category`/`overall` and `country`/`region`/`trade_bloc`/`overall`) so both lenses stay one query shape, not two hand-kept-in-sync copies. Scores `annual_growth_pct × (1 − share_pct)`; `confidence` is the geometric mean of years-coverage, adjusted-R² trend fit, and volume confidence (see the ADR). Groups with fewer than `min_years_active` (floor 4) active years in the trailing `window_years` are dropped — adjusted R² is undefined/unstable below that.
+
+**App** (`app/`):
+- `main.py` — Streamlit prototype over `analysis/opportunity_scoring.py`. Sidebar picks the lens (product→markets or country→products), the fixed value, the ranked axis, and `window_years`/`min_years_active`; results render as an Altair bar chart (top 15 by `opportunity_score`) plus the full ranked table. Reads the tracked `comexstat.duckdb` directly via `get_connection()` — no separate app-layer data access.
 
 **Data directory conventions** (`.gitignore`):
 - `data/processed/comexstat.duckdb` — tracked in git (small, narrow NCM scope; doubles as change history — see ADR 0003). Everything else in `data/processed/` is ignored.
