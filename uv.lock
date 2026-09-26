@@ -713,6 +713,7 @@ name = "dv-beef-exports"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "altair" },
     { name = "duckdb" },
     { name = "pandas" },
     { name = "requests" },
@@ -733,6 +734,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "altair", specifier = ">=5.0.0" },
     { name = "duckdb", specifier = ">=1.5.5" },
     { name = "pandas", specifier = ">=3.0.5" },
     { name = "requests", specifier = ">=2.34.2" },
