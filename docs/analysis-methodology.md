@@ -540,12 +540,6 @@ label "volume confidence" oversells it. Reading it next to absolute tons
 is the mitigation; a floor on absolute volume would be a change to the
 methodology, not a bug fix.
 
-### Pending unit change
-
-The code currently emits `total_kg`. Tons are the only meaningful unit for
-this trade, so this document is written in tons throughout; the column
-becomes `total_metric_ton` when that change lands.
-
 ---
 
 ## Quick reference

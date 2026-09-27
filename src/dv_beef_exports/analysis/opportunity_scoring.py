@@ -41,7 +41,7 @@ _OUTPUT_COLUMNS = [
     "share_pct",
     "opportunity_score",
     "total_fob_usd",
-    "total_kg",
+    "total_metric_ton",
     "unit_price_usd_per_ton",
 ]
 
@@ -78,7 +78,7 @@ def rank_markets(
         sorted by opportunity_score descending. Columns: the geo_level
         name itself (e.g. "country"), years_active, annual_growth_pct,
         trend_r2_adj, coverage_score, volume_confidence, confidence,
-        share_pct, opportunity_score, total_fob_usd, total_kg,
+        share_pct, opportunity_score, total_fob_usd, total_metric_ton,
         unit_price_usd_per_ton.
     """
     return _score_opportunities(
@@ -163,7 +163,7 @@ def _score_opportunities(
                 {ranked_col} AS group_value,
                 year,
                 sum(fob_usd) AS fob_usd,
-                sum(kg)      AS kg
+                sum(metric_ton)      AS metric_ton
             FROM marts.exports
             WHERE year BETWEEN ? AND ?
                 {fixed_filter_sql}
@@ -176,7 +176,7 @@ def _score_opportunities(
             regr_r2(ln(fob_usd), year)    AS trend_r2,
             count(*)                      AS years_active,
             sum(fob_usd)                  AS total_fob_usd,
-            sum(kg)                       AS total_kg
+            sum(metric_ton)                       AS total_metric_ton
         FROM windowed
         GROUP BY group_value
         HAVING count(*) >= ?
@@ -239,7 +239,7 @@ def _score_opportunities(
     # sum-then-divide at this query's own aggregation grain, over the same
     # trailing window as everything else - never an average of row-level
     # or sub-group ratios (Felipe's flagged Tableau-style gotcha).
-    result["unit_price_usd_per_ton"] = result["total_fob_usd"] / (result["total_kg"] / 1000.0)
+    result["unit_price_usd_per_ton"] = result["total_fob_usd"] / result["total_metric_ton"]
 
     result = result.rename(columns={"group_value": ranked_col})
     return (

@@ -32,7 +32,7 @@ def con() -> duckdb.DuckDBPyConnection:
             trade_bloc VARCHAR,
             year       INTEGER,
             fob_usd    DOUBLE,
-            kg         DOUBLE
+            metric_ton DOUBLE
         )
     """)
     yield connection
@@ -43,7 +43,7 @@ def _insert(con: duckdb.DuckDBPyConnection, rows: list[dict[str, Any]]) -> None:
     con.executemany(
         """
         INSERT INTO marts.exports
-            (ncm_code, category, country, region, trade_bloc, year, fob_usd, kg)
+            (ncm_code, category, country, region, trade_bloc, year, fob_usd, metric_ton)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
@@ -55,7 +55,7 @@ def _insert(con: duckdb.DuckDBPyConnection, rows: list[dict[str, Any]]) -> None:
                 r.get("trade_bloc"),
                 r["year"],
                 r["fob_usd"],
-                r.get("kg", r["fob_usd"] * 2.0),
+                r.get("metric_ton", r["fob_usd"] * 0.002),
             )
             for r in rows
         ],
@@ -268,21 +268,21 @@ def test_share_pct_and_opportunity_score_ranking(con: duckdb.DuckDBPyConnection)
 
 
 def test_unit_price_is_sum_then_divide_not_row_average(con: duckdb.DuckDBPyConnection) -> None:
-    # kg = 2x fob for every row (the _insert default) -> unit price is
-    # exactly 500 regardless of totals.
+    # metric_ton = 0.002x fob for every row (the _insert default) -> unit
+    # price is exactly 500 regardless of totals.
     uniform_rows = _exp_series(
         2020, 4, final_value=1000, rate=0.1, ncm_code=PRODUCT_A, country="Uniformland"
     )
     _insert(con, uniform_rows)
 
-    # give kg a wildly different ratio to fob each year - if the module
-    # ever averaged row-level (fob/kg) ratios instead of summing both
+    # give tons a wildly different ratio to fob each year - if the module
+    # ever averaged row-level (fob/ton) ratios instead of summing both
     # first, this would produce a different, wrong number.
     heterogeneous_rows = _exp_series(
         2020, 4, final_value=1000, rate=0.1, ncm_code=PRODUCT_A, country="Wobbleland"
     )
     for i, row in enumerate(heterogeneous_rows):
-        row["kg"] = row["fob_usd"] * (1.0 if i % 2 == 0 else 50.0)
+        row["metric_ton"] = row["fob_usd"] * (0.001 if i % 2 == 0 else 0.05)
     _insert(con, heterogeneous_rows)
 
     result = rank_markets(
@@ -292,8 +292,8 @@ def test_unit_price_is_sum_then_divide_not_row_average(con: duckdb.DuckDBPyConne
     assert result.loc["Uniformland", "unit_price_usd_per_ton"] == pytest.approx(500.0)
 
     expected_total_fob = sum(r["fob_usd"] for r in heterogeneous_rows)
-    expected_total_kg = sum(r["kg"] for r in heterogeneous_rows)
-    expected_unit_price = expected_total_fob / (expected_total_kg / 1000.0)
+    expected_total_ton = sum(r["metric_ton"] for r in heterogeneous_rows)
+    expected_unit_price = expected_total_fob / expected_total_ton
     assert result.loc["Wobbleland", "unit_price_usd_per_ton"] == pytest.approx(expected_unit_price)
 
 
