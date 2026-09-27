@@ -53,7 +53,7 @@ _COLUMN_LABELS = {
     "share_pct": "Share %",
     "opportunity_score": "Opportunity score",
     "total_fob_usd": "Total FOB (USD)",
-    "total_kg": "Total KG",
+    "total_kg": "Total Tons",
     "unit_price_usd_per_ton": "USD / ton",
 }
 
