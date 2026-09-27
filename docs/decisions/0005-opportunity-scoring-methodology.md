@@ -1,5 +1,10 @@
 # 0005 — Opportunity scoring and confidence methodology
 
+> This ADR records *why* these formulas were chosen. For the working
+> reference — every metric with its formula, a worked example against the
+> real tracked database, how to read it, and where it misleads — see
+> [`docs/analysis-methodology.md`](../analysis-methodology.md).
+
 ## Context
 Phase 2 analysis needs to answer two symmetric questions, both parametrized
 over `product_level` (`ncm_code | category | overall`) and `geo_level`
