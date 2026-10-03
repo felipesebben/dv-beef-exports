@@ -31,29 +31,32 @@ against each other rather than taken on faith:
 > opportunities?**
 > Default parameters: `window_years=10`, `min_years_active=4`,
 > `product_level="ncm_code"`, `geo_level="country"`.
+> Data through **August 2026**.
 
-`rank_markets()` returns 52 countries, and **Singapore ranks #1** with an
-`opportunity_score` of `1.482`. Its yearly Brazilian-export history, which
-every metric below is derived from:
+`rank_markets()` returns 53 countries, and **Singapore ranks #2** with an
+`opportunity_score` of `1.513` (#1, Bahrain, is a distortion worth its own
+note — see [Known distortions](#known-distortions-in-the-current-data)).
+Every metric below is derived from Singapore's Brazilian-export history,
+grouped into trailing 12-month periods ending at the latest month in the
+data (see [Step 1](#step-1--the-trailing-window)):
 
-| Year | FOB (USD) | Tons | USD/ton |
-| --- | --- | --- | --- |
-| 2017 | — | — | — |
-| 2018 | 101 | 0.062 | 1,629 |
-| 2019 | 463 | 0.231 | 2,004 |
-| 2020 | 649 | 0.211 | 3,076 |
-| 2021 | 973 | 0.333 | 2,922 |
-| 2022 | 11,202 | 5.192 | 2,158 |
-| 2023 | 25,964 | 14.489 | 1,792 |
-| 2024 | 71,666 | 51.784 | 1,384 |
-| 2025 | 150,694 | 88.183 | 1,709 |
-| 2026 | 46,899 | 21.737 | 2,158 |
+| Period | `periods_ago` | FOB (USD) | Tons | USD/ton |
+| --- | --- | --- | --- | --- |
+| Sep 2016 – Aug 2018 | 9, 8 | — | — | — |
+| Sep 2018 – Aug 2019 | 7 | 524 | 0.273 | 1,919 |
+| Sep 2019 – Aug 2020 | 6 | 565 | 0.195 | 2,897 |
+| Sep 2020 – Aug 2021 | 5 | 752 | 0.237 | 3,173 |
+| Sep 2021 – Aug 2022 | 4 | 9,083 | 4.258 | 2,133 |
+| Sep 2022 – Aug 2023 | 3 | 19,599 | 10.191 | 1,923 |
+| Sep 2023 – Aug 2024 | 2 | 62,338 | 44.210 | 1,410 |
+| Sep 2024 – Aug 2025 | 1 | 110,513 | 67.569 | 1,636 |
+| Sep 2025 – Aug 2026 | 0 | 105,237 | 55.289 | 1,903 |
 
-Note the scale before anything else: 2018's entire year was **62 kg** and
-$101. This is a market that grew from a rounding error to 88 tons in seven
-years — genuinely fast, and still genuinely small. Holding both of those
-facts at once is the entire point of reporting score and confidence
-separately.
+Note the scale before anything else: the first active period was **273 kg**
+and $524. This is a market that grew from a rounding error to ~68 tons a
+year in six years — genuinely fast, and still genuinely small. Holding both
+of those facts at once is the entire point of reporting score and
+confidence separately.
 
 ---
 
@@ -75,7 +78,8 @@ fixes a geography and ranks products. They are the same query, pivoted —
 so every formula below applies unchanged to both.
 
 **Worked example.** Fixed axis: `ncm_code = '02062200'`. Ranked axis:
-`country`. Singapore is one group; its input is the nine rows above.
+`country`. Singapore is one group; its input is the eight active periods
+above.
 
 **Where it misleads.** `share_pct` is the only metric whose meaning
 *changes* with the pivot, because its denominator is the fixed axis. See
@@ -85,57 +89,77 @@ its own section.
 
 ## Step 1 — The trailing window
 
-**Question.** Which years count?
+**Question.** Which stretch of time counts, and how is it cut into years?
 
-**Formula.**
+**Formula.** Time is cut into **trailing 12-month periods** ending at the
+latest month in the data, not calendar years:
 
 ```
-max_year = the latest year present in marts.exports
-min_year = max_year - window_years + 1
+month_index = year * 12 + month - 1
+latest_idx  = max(month_index) across marts.exports
+periods_ago = (latest_idx - month_index) // 12     -- 0 = the latest 12 months
+
+in window  <=>  periods_ago < window_years
 ```
 
-**Worked example.** `max_year = 2026`, `window_years = 10` →
-**2017–2026**. Brazil's data goes back to 1997, so 20 years of history are
-deliberately excluded: the question is what the market looks like *now*,
-not in 2003.
+Every "year" in the methodology — `years_active`, the growth rate, the
+share year — is one of these periods.
+
+**Worked example.** Latest month = **Aug 2026**, `window_years = 10` →
+ten periods, **Sep 2016 – Aug 2026**. Brazil's data goes back to 1997, so
+about 20 years of history are deliberately excluded: the question is what
+the market looks like *now*, not in 2003.
 
 **How to read it.** Widening the window buys statistical stability and
 loses currency. Ten years is long enough for the trend fit to have
 something to work with and short enough that a market's 2005 behaviour
 does not outvote its 2024 behaviour.
 
+Periods rather than calendar years because the latest calendar year is
+almost always partial: ComexStat publishes monthly, so in September the
+current year holds eight months. Scored as a full year, it reads as a
+one-third collapse for every market — before this change, that dragged
+Guyana's trend fit down to 0.17 (now 0.69) and Hong Kong's to 0.25 (now
+0.69). Rolling periods keep the newest data, keep every period a full 12
+months, and invent nothing (unlike annualising, which would guess at the
+missing months and get seasonal buyers wrong).
+
 **Where it misleads.** The window is a hard edge, not a taper — a market
-that collapsed in 2016 looks untouched by it. And `max_year` is whatever
-is in the database, **including a partial current year** (see [Known
+that collapsed just before it looks untouched by it. Period boundaries
+also move every month as new data lands, so a ranking pulled in September
+and one pulled in October are cut differently; small markets with one or
+two shipments a year can shift between periods (see Bahrain under [Known
 distortions](#known-distortions-in-the-current-data)).
 
 ---
 
 ## Step 2 — `years_active`, and the >= 4 floor
 
-**Question.** How many years in the window did this group actually buy
-anything?
+**Question.** In how many of the window's periods did this group actually
+buy anything?
 
-**Formula.** Years are aggregated first, then only positive ones are kept:
+**Formula.** Periods are aggregated first, then only positive ones are
+kept:
 
 ```
-years_active = count of years in [min_year, max_year] where sum(fob_usd) > 0
+years_active = count of periods with periods_ago < window_years where sum(fob_usd) > 0
 ```
 
 Groups with `years_active < min_years_active` are **dropped entirely** —
 no score, no confidence, not ranked. The floor cannot be set below 3, and
 4 is the recommended default.
 
-**Worked example.** Singapore: `years_active = 9` (every year from 2018
-on, nothing in 2017). Across all frozen-liver buyers, **61 of 113
-countries are dropped** by the floor and 52 survive.
+**Worked example.** Singapore: `years_active = 8` (every period from
+Sep 2018 – Aug 2019 on; nothing in the two before). Across all frozen-liver
+buyers in the window, **61 of 114 countries are dropped** by the floor and
+53 survive.
 
 **How to read it.** This is the crudest and most important filter in the
 methodology. A market with two years of history is not a trend, it is an
 anecdote.
 
-**Where it misleads.** A genuinely new market — first shipment in 2025,
-growing fast — is invisible until it has four years of history. That is a
+**Where it misleads.** A genuinely new market — first shipment last year,
+growing fast — is invisible until it has four periods of history. That is a
 deliberate trade: ADR 0005's amendment documents what happened when the
 floor was absent (Jordan appearing at ~143,000%/year growth off two data
 points). Such markets have to be found by eyeballing recent raw volume,
@@ -148,36 +172,43 @@ not by this ranking.
 **Question.** Is there one steady growth trajectory here, and how steep is
 it?
 
-**Formula.** A least-squares regression of **log** FOB on year, over the
-active years only, using DuckDB's built-in aggregates:
+**Formula.** A least-squares regression of **log** FOB on time, over the
+active periods only, using DuckDB's built-in aggregates. Time is
+`-periods_ago`, so it runs forward (oldest to newest) and one unit is one
+year:
 
 ```sql
-regr_slope(ln(fob_usd), year) AS log_growth_rate
-regr_r2(ln(fob_usd), year)    AS trend_r2
+regr_slope(ln(fob_usd), -periods_ago) AS log_growth_rate
+regr_r2(ln(fob_usd), -periods_ago)    AS trend_r2
 ```
 
 Log space, not raw dollars, because trade growth is multiplicative: a
 market going 100 → 200 → 400 is *one* straight line in log space and an
 accelerating curve in dollars.
 
-**Worked example.** Singapore, 2018–2026 (n = 9):
+**Worked example.** Singapore, eight active periods (n = 8):
 
 ```
-log_growth_rate = 0.910185
-trend_r2        = 0.908226
+log_growth_rate = 0.922851
+trend_r2        = 0.927228
 ```
 
 **How to read it.** The slope is growth per year *in log units* — not
 directly readable, which is why the next step converts it. `trend_r2` is
-how much of the year-to-year variation one straight line explains: a
+how much of the period-to-period variation one straight line explains: a
 steady climber approaches 1, a spike-then-collapse or a sawtooth scores
 low.
 
-**Where it misleads.** A single regression over the whole window cannot
-see a **turning point**. A market that grew hard 2017–2022 and has fallen
-since 2023 still reports positive growth with a mediocre fit. Only the
-yearly history shows that shape — which is why the app puts the history
-chart next to the score.
+**Where it misleads.** Two ways.
+
+1. A single regression over the whole window cannot see a **turning
+   point**. A market that grew hard for six years and has fallen for the
+   last two still reports positive growth with a mediocre fit. Only the
+   period-by-period history shows that shape — the app does not chart it
+   yet, so check `marts.exports` directly before acting on a lead.
+2. In log space, a **tiny first value** has enormous leverage: going from
+   $42 to $13,000 is a bigger log step than going from $1M to $100M. One
+   near-zero period at the start of a series can dominate the slope.
 
 ---
 
@@ -194,17 +225,17 @@ annual_growth_pct = exp(log_growth_rate) - 1
 **Worked example.**
 
 ```
-exp(0.910185) - 1 = 1.484782  →  +148.5% per year
+exp(0.922851) - 1 = 1.516455  →  +151.6% per year
 ```
 
 **How to read it.** The compound annual growth implied by the fitted line
-— not the change between any two specific years. Singapore's +148%/yr
+— not the change between any two specific periods. Singapore's +152%/yr
 means the fitted trend roughly 2.5x's every year across the window.
 
 **Where it misleads.** Percentage growth is **scale-blind by design**
 (that is what makes products of wildly different size comparable), so it
-says nothing about whether the market is worth serving. $101 → $150,694
-is +148%/yr; so is $101M → $150M. `volume_confidence` and the absolute
+says nothing about whether the market is worth serving. $524 → $105,237
+is +152%/yr; so is $524M → $105B. `volume_confidence` and the absolute
 tons/FOB columns exist to supply what this number deliberately omits.
 
 ---
@@ -223,12 +254,12 @@ trend_r2_adj = 1 - (1 - trend_r2) * (years_active - 1) / (years_active - 2)
 **Worked example.**
 
 ```
-1 - (1 - 0.908226) * (9 - 1) / (9 - 2)
-= 1 - 0.091774 * 8/7
-= 0.895115
+1 - (1 - 0.927228) * (8 - 1) / (8 - 2)
+= 1 - 0.072772 * 7/6
+= 0.915100
 ```
 
-Slightly below the raw 0.908 — a small penalty, because nine points is a
+Slightly below the raw 0.927 — a small penalty, because eight points is a
 reasonable amount of evidence.
 
 **How to read it.** ~0.9 means "a single steady exponential explains
@@ -256,17 +287,17 @@ attempt at this fix was caught.
 coverage_score = min(years_active / window_years, 1.0)
 ```
 
-**Worked example.** Singapore: `9 / 10 = 0.9`.
+**Worked example.** Singapore: `8 / 10 = 0.8`.
 
 **How to read it.** A penalty for gappy or short history. A market present
-in every year of the window scores 1.0; one present in four of ten scores
+in every period of the window scores 1.0; one present in four of ten scores
 0.4 — a hard ceiling on its confidence no matter how cleanly those four
-years line up.
+periods line up.
 
-**Where it misleads.** It cannot distinguish *why* a year is missing:
+**Where it misleads.** It cannot distinguish *why* a period is missing:
 "this market did not exist yet" and "this market stopped buying for a
-year" score identically. Singapore's 0.9 is the former; a 0.9 caused by a
-gap in the middle of the window would be more worrying.
+year" score identically. Singapore's 0.8 is the former; a 0.8 caused by
+gaps in the middle of the window would be more worrying.
 
 ---
 
@@ -291,8 +322,8 @@ grid**, not just the groups matching the current filter — so "big" means
 big compared to a typical product-country pair, not big compared to the
 handful of countries on screen.
 
-**Worked example.** For the `ncm_code x country` grid over 2017–2026,
-across 1,253 groups: **`K` = $49,736**. Singapore:
+**Worked example.** For the `ncm_code x country` grid over Sep 2016 –
+Aug 2026, across 1,257 groups: **`K` = $49,736**. Singapore:
 
 ```
 308,611 / (308,611 + 49,736) = 0.861
@@ -304,7 +335,7 @@ across 1,253 groups: **`K` = $49,736**. Singapore:
 
 **Where it misleads.** This is the most over-readable number in the set.
 Singapore's 0.861 sounds like a strong endorsement; the underlying figure
-is **$308,611 of total trade spread over nine years**, roughly $34k/year.
+is **$308,611 of total trade spread over eight years**, roughly $39k/year.
 It cleared the bar because the bar is the median group ($49,736), and the
 median product-country pair in this dataset is tiny. `volume_confidence`
 answers *"is this statistically substantial?"*, never *"is this
@@ -327,11 +358,11 @@ confidence = (coverage_score * trend_r2_adj * volume_confidence) ^ (1/3)
 **Worked example.**
 
 ```
-(0.9 * 0.895115 * 0.861207) ^ (1/3) = 0.885
+(0.8 * 0.915100 * 0.861207) ^ (1/3) = 0.857
 ```
 
-**How to read it.** **An index on a 0–1 scale, not a probability.** 0.885
-does not mean "88.5% likely to be right"; it means all three evidence legs
+**How to read it.** **An index on a 0–1 scale, not a probability.** 0.857
+does not mean "85.7% likely to be right"; it means all three evidence legs
 are individually strong. Read it as a band rather than a precise value:
 
 | Range | Reading |
@@ -340,10 +371,11 @@ are individually strong. Read it as a band rather than a precise value:
 | 0.40 – 0.70 | one leg is weak; check which before acting |
 | below 0.40 | thin evidence — treat the score as a hypothesis only |
 
-Always look at which leg is *binding*. A confidence of 0.33 from
-`coverage 0.4 x fit 0.17 x volume 0.52` (Guyana, in this ranking) is a
-short-history problem, not a size problem, and the remedy — wait for more
-years — is different.
+Always look at which leg is *binding*. A confidence of 0.52 from
+`coverage 0.4 x fit 0.69 x volume 0.52` (Guyana, #3 in this ranking) is a
+short-history problem first — four active periods of ten — and the
+remedy, waiting for more years, is different from the remedy for a weak
+fit or a tiny market.
 
 **Where it misleads.** The geometric mean is deliberately AND-like: one
 near-zero leg drags the whole thing toward zero regardless of the other
@@ -359,11 +391,12 @@ appears nowhere in this formula.
 **Question.** How much of this trade does the group already account for —
 i.e. how much headroom is left?
 
-**Formula.** Share of the **fixed** axis, in the most recent year only:
+**Formula.** Share of the **fixed** axis, in the latest 12-month period
+only (`periods_ago = 0`):
 
 ```
-share_pct = group's fob_usd in max_year
-            / total fob_usd in max_year across the fixed axis
+share_pct = group's fob_usd in the latest period
+            / total fob_usd in the latest period across the fixed axis
 ```
 
 Which pivots with the lens:
@@ -371,14 +404,14 @@ Which pivots with the lens:
 - product fixed → this country's share of that product's exports
 - country fixed → this product's share of that country's purchases
 
-**Worked example.** In 2026, Brazil exported $25,468,727 of frozen livers
-in total. Singapore took $46,899:
+**Worked example.** From Sep 2025 to Aug 2026, Brazil exported $49,040,432
+of frozen livers in total. Singapore took $105,237:
 
 ```
-46,899 / 25,468,727 = 0.00184  →  0.18%
+105,237 / 49,040,432 = 0.00215  →  0.21%
 ```
 
-For contrast, Egypt took $17,259,004 of that same total — **67.8%**.
+For contrast, Egypt took $30,054,566 of that same total — **61.3%**.
 
 **How to read it.** Low share is the "opportunity" half of the score: a
 market Brazil barely serves has room to grow. High share means the
@@ -386,9 +419,10 @@ position is already won, and growth there is defence, not expansion.
 
 **Where it misleads.** Two things.
 
-1. It is **one year**, not the window — deliberately, since headroom is a
-   question about *now*, but it makes `share_pct` the noisiest input to
-   the score.
+1. It is **one period**, not the window — deliberately, since headroom is
+   a question about *now*, but it makes `share_pct` the noisiest input to
+   the score. Being a full 12 months, it does at least count seasonal
+   buyers fairly, whichever months they buy in.
 2. It is share of **Brazil's** exports, not of the destination's total
    imports. A country buying 100% of its beef from Brazil and one buying
    1% look identical here. ComexStat cannot see other suppliers at all —
@@ -409,31 +443,31 @@ opportunity_score = annual_growth_pct * (1 - share_pct)
 **Worked example.**
 
 ```
-1.484782 * (1 - 0.001841) = 1.482049
+1.516455 * (1 - 0.002146) = 1.513201
 ```
 
 **How to read it.** The score is not an arbitrary index — it has a
 readable meaning: **the growth rate, discounted by the share already
-held.** Singapore's `1.482` reads as *"growing about 148%/yr with
+held.** Singapore's `1.513` reads as *"growing about 152%/yr with
 essentially all of its headroom still open (99.8%)."* That is why it
-barely differs from its raw growth rate: at 0.18% share, the discount is
+barely differs from its raw growth rate: at 0.21% share, the discount is
 negligible.
 
 The discount only bites when share is large:
 
 | Country | Growth/yr | Share | Headroom | Score |
 | --- | --- | --- | --- | --- |
-| Singapore | +148.5% | 0.18% | 99.82% | **1.482** |
-| Egypt | +66.7% | 67.77% | 32.23% | **0.215** |
+| Singapore | +151.6% | 0.21% | 99.79% | **1.513** |
+| Egypt | +81.9% | 61.29% | 38.71% | **0.317** |
 
-Egypt is growing fast in absolute terms — $35.8M in 2025 — but two-thirds
-of the market is already Brazil's, so most of that growth is not
-*opportunity*. Negative growth produces a negative score with no
-special-casing.
+Egypt is growing fast in absolute terms — $30.1M in the latest 12 months,
+up from $5.1M two periods earlier — but most of the market is already
+Brazil's, so most of that growth is not *opportunity*. Negative growth
+produces a negative score with no special-casing.
 
 **Where it misleads.** The score inherits everything `annual_growth_pct`
-omits — above all, scale. It is a **ranking key, not a magnitude**: "1.482
-vs. 0.915" means "ranks higher", not "1.6x better". And because
+omits — above all, scale. It is a **ranking key, not a magnitude**: "1.513
+vs. 0.893" means "ranks higher", not "1.7x better". And because
 `(1 - share_pct)` is bounded in `[0, 1]` while growth is unbounded, growth
 dominates: for any market under ~5% share, the score is effectively just
 its growth rate. Never read it without `confidence` and absolute volume
@@ -452,12 +486,13 @@ same window:
 unit_price_usd_per_ton = sum(fob_usd) / sum(metric_ton)
 ```
 
-**Worked example.** Singapore, 2017–2026: $308,611 over 182.222 tons →
-**$1,694/ton**.
+**Worked example.** Singapore, Sep 2016 – Aug 2026: $308,611 over 182.222
+tons → **$1,694/ton**.
 
-Averaging the nine yearly ratios in the table instead gives **$2,092/ton**
-— a **23.5% overstatement**, because 2018's 62 kg shipment at $1,629/ton
-gets the same weight as 2025's 88 tons.
+Averaging the eight per-period ratios in the table instead gives
+**$2,124/ton** — a **25.4% overstatement**, because the Sep 2019 – Aug 2020
+period's 195 kg at $2,897/ton gets the same weight as Sep 2024 – Aug 2025's
+68 tons at $1,636/ton.
 
 **How to read it.** A descriptive column, not a score input. Useful for
 sanity-checking a market (is it paying premium or discount prices?) and
@@ -474,16 +509,16 @@ above is why.
 
 ## Reading a result: the pair that matters
 
-The most useful comparison in this ranking is not #1 vs. #2 — it is #1 vs.
-the incumbent:
+The most useful comparison in this ranking is not #1 vs. #2 — it is a
+top-ranked newcomer vs. the incumbent:
 
 | | Singapore | Egypt |
 | --- | --- | --- |
-| Rank by score | **#1** | #31 |
-| `opportunity_score` | 1.482 | 0.215 |
-| `confidence` | 0.885 | 0.863 |
-| `annual_growth_pct` | +148.5% | +66.7% |
-| `share_pct` | 0.18% | 67.8% |
+| Rank by score | **#2** | #24 |
+| `opportunity_score` | 1.513 | 0.317 |
+| `confidence` | 0.857 | 0.876 |
+| `annual_growth_pct` | +151.6% | +81.9% |
+| `share_pct` | 0.21% | 61.3% |
 | Total FOB in window | $308,611 | $83,991,851 |
 | Total tons in window | 182 | 51,503 |
 
@@ -496,10 +531,11 @@ that difference looks like in practice.
 
 The intended workflow follows from that:
 
-1. **Score** narrows 113 countries to a shortlist.
+1. **Score** narrows 114 countries to a shortlist.
 2. **Confidence** says which shortlist entries are backed by evidence.
 3. **Absolute tons and FOB** say which are worth a sales conversation.
-4. **The yearly history** shows whether the trend is still intact.
+4. **The period-by-period history** shows whether the trend is still
+   intact.
 
 The score is a lead generator for manual research, never the decision.
 
@@ -509,32 +545,40 @@ The score is a lead generator for manual research, never the decision.
 
 Real issues in the output as it stands today, not hypotheticals.
 
-### The current year is partial
+### A tiny first period can inflate growth (Bahrain)
 
-`max_year` is whatever the database holds, and the 2026 slice currently
-covers **months 1–8 only**. Two consequences:
+Bahrain (spelled `Bahrein` in ComexStat) ranks **#1** for frozen livers at
+`opportunity_score = 3.78` — +379%/yr. Its five active periods:
 
-- The trend fit treats a two-thirds year as a full one, **understating
-  growth** for any market that is still growing. Egypt's 2026 ($17.3M)
-  against 2025 ($35.8M) reads as a collapse; it is 8 months against 12.
-- `share_pct` is computed on that partial year. Being a ratio, this mostly
-  cancels out — but not for markets whose buying is seasonal inside the
-  missing months.
+| Period | FOB (USD) |
+| --- | --- |
+| Sep 2021 – Aug 2022 | 42 |
+| Sep 2022 – Aug 2023 | 13,080 |
+| Sep 2023 – Aug 2024 | 33,241 |
+| Sep 2024 – Aug 2025 | 13,960 |
+| Sep 2025 – Aug 2026 | 102,339 |
 
-Options when this gets addressed: exclude the partial year from the fit,
-annualise it, or report it separately. Not yet decided.
+The first period is two shipments worth $22 and $20. In log space the jump
+from $42 to $13,080 is larger than any other step in the series, so it
+drives most of the slope (see [Step 3](#step-3--the-log-linear-trend-fit)).
+Under calendar years the same two shipments were merged with a $13,080
+December shipment and the distortion was hidden; the period cut exposes
+it. The guardrails partly catch it — `confidence` is 0.60 (middle band:
+coverage 0.5, fit 0.56) — but the score itself is not trustworthy.
+Possible fixes, none decided: a minimum value for a period to count as
+active, or a robust slope estimator less sensitive to one extreme point.
 
 ### Brazil appears as a destination country
 
-`Brazil` shows up as a frozen-liver *buyer* ($2,147 over 4 years, ranked
-#7 by score) — re-imports or returned shipments inside ComexStat's export
+`Brazil` shows up as a frozen-liver *buyer* ($2,147 over 4 periods, ranked
+#4 by score) — re-imports or returned shipments inside ComexStat's export
 data. Small in value, but it is not a market, and it should probably be
 excluded at the marts layer.
 
 ### `K`'s bar is low
 
 At `K = $49,736` for the `ncm_code x country` grid, a market averaging
-$34k/year clears `volume_confidence = 0.86`. The formula is behaving as
+$39k/year clears `volume_confidence = 0.86`. The formula is behaving as
 designed — the median product-country pair really is that small — but the
 label "volume confidence" oversells it. Reading it next to absolute tons
 is the mitigation; a floor on absolute volume would be a change to the
@@ -546,13 +590,13 @@ methodology, not a bug fix.
 
 | Column | One-line meaning | Scale |
 | --- | --- | --- |
-| `years_active` | years in the window with any exports | count |
+| `years_active` | 12-month periods in the window with any exports | count |
 | `annual_growth_pct` | compound yearly growth from the fitted trend | % (unbounded) |
 | `trend_r2_adj` | how well one steady trend explains the history | 0–1 |
 | `coverage_score` | how complete the history is within the window | 0–1 |
 | `volume_confidence` | how large this group is vs. a typical one | 0–1 |
 | `confidence` | all three evidence legs combined (geometric mean) | 0–1 index |
-| `share_pct` | slice of the fixed axis already held, latest year | % |
+| `share_pct` | slice of the fixed axis already held, latest 12 months | % |
 | `opportunity_score` | growth, discounted by share already held | ranking key |
 | `total_fob_usd` | total export value in the window | USD |
 | `total_metric_ton` | total export weight in the window | tons |
