@@ -444,3 +444,41 @@ def test_build_marts_country_with_only_a_region_has_null_trade_bloc(
     ).fetchone()
     assert row == ("Asia (minus MIDDLE EAST)", None)
     con.close()
+
+
+def test_build_marts_excludes_brazil_as_destination_but_staging_keeps_it(
+    tmp_path: Path, monkeypatch
+) -> None:
+    con = _connect(tmp_path)
+    monkeypatch.setattr(
+        duckdb_loader,
+        "fetch_countries",
+        lambda language="en": [{"id": "105", "text": "Brazil"}, {"id": "160", "text": "China"}],
+    )
+    monkeypatch.setattr(duckdb_loader, "fetch_economic_blocks", lambda language="en": [])
+    monkeypatch.setattr(duckdb_loader, "fetch_country_blocs", lambda language="en": [])
+    refresh_dim_country(con)
+    brazil_row = {**CHINA_FEB_2024, "country": "Brazil"}
+    ingest_raw(con, [CHINA_FEB_2024, brazil_row], ["02023000"], "2024-01", "2024-03")
+    build_staging(con)
+
+    build_marts(con)
+
+    staging_countries = con.execute("SELECT country FROM staging.exports ORDER BY 1").fetchall()
+    marts_countries = con.execute("SELECT country FROM marts.exports").fetchall()
+    assert staging_countries == [("Brazil",), ("China",)]
+    assert marts_countries == [("China",)]
+    con.close()
+
+
+def test_build_marts_keeps_rows_with_no_country_code(tmp_path: Path) -> None:
+    """dim_country never refreshed -> co_pais is NULL for every row. The
+    Brazil filter must not drop those (a plain `<> '105'` would)."""
+    con = _connect(tmp_path)
+    ingest_raw(con, [CHINA_FEB_2024], ["02023000"], "2024-01", "2024-03")
+    build_staging(con)
+
+    build_marts(con)
+
+    assert con.execute("SELECT count(*) FROM marts.exports").fetchone() == (1,)
+    con.close()

@@ -33,7 +33,7 @@ against each other rather than taken on faith:
 > `product_level="ncm_code"`, `geo_level="country"`.
 > Data through **August 2026**.
 
-`rank_markets()` returns 53 countries, and **Singapore ranks #1** with an
+`rank_markets()` returns 52 countries, and **Singapore ranks #1** with an
 `opportunity_score` of `1.513`.
 Every metric below is derived from Singapore's Brazilian-export history,
 grouped into trailing 12-month periods ending at the latest month in the
@@ -75,6 +75,11 @@ group       = one distinct value of the ranked axis, filtered to the fixed axis
 `rank_markets()` fixes a product and ranks geographies; `rank_products()`
 fixes a geography and ranks products. They are the same query, pivoted —
 so every formula below applies unchanged to both.
+
+Everything reads from `marts.exports`, which excludes Brazil itself as a
+destination — ComexStat lists it for a few hundred rows (~$204k in total,
+re-imports or returned goods), and it is not an export market.
+`staging.exports` keeps those rows, faithful to the source.
 
 **Worked example.** Fixed axis: `ncm_code = '02062200'`. Ranked axis:
 `country`. Singapore is one group; its input is the eight active periods
@@ -160,9 +165,8 @@ on the slope — going from $42 to $13,080 is a bigger log step than going
 from $1M to $100M. Bahrain's frozen-liver history starts with a $42 period
 (two shipments of $22 and $20), then runs $13,080 → $33,241 → $13,960 →
 $102,339. Untrimmed, that $42 made Bahrain the #1 opportunity at
-+379%/yr; trimmed (0.3% of its $13,960 median), it is +70%/yr and #8.
-Across the whole `ncm_code x country` grid the trim touches 16 of 727
-groups.
++379%/yr; trimmed (0.3% of its $13,960 median), it is +70%/yr and #7.
+Across the whole `ncm_code x country` grid the trim touches 16 groups.
 
 Groups with `years_active < min_years_active` are **dropped entirely** —
 no score, no confidence, not ranked. The floor cannot be set below 3, and
@@ -172,8 +176,8 @@ no score, no confidence, not ranked. The floor cannot be set below 3, and
 Sep 2018 – Aug 2019 on; nothing in the two before). Its first period,
 $524, is 3.7% of its $14,341 median — small but real, so nothing is
 trimmed. Across all frozen-liver
-buyers in the window, **61 of 114 countries are dropped** by the floor and
-53 survive.
+buyers in the window, **61 of 113 countries are dropped** by the floor and
+52 survive.
 
 **How to read it.** This is the crudest and most important filter in the
 methodology. A market with two years of history is not a trend, it is an
@@ -346,10 +350,10 @@ big compared to a typical product-country pair, not big compared to the
 handful of countries on screen.
 
 **Worked example.** For the `ncm_code x country` grid over Sep 2016 –
-Aug 2026, across 1,257 groups: **`K` = $49,736**. Singapore:
+Aug 2026, across 1,247 groups: **`K` = $52,119**. Singapore:
 
 ```
-308,611 / (308,611 + 49,736) = 0.861
+308,611 / (308,611 + 52,119) = 0.856
 ```
 
 **How to read it.** 0.5 means "exactly median-sized". Above ~0.8 means
@@ -357,9 +361,9 @@ Aug 2026, across 1,257 groups: **`K` = $49,736**. Singapore:
 — Egypt, at $84M, scores 0.9994.
 
 **Where it misleads.** This is the most over-readable number in the set.
-Singapore's 0.861 sounds like a strong endorsement; the underlying figure
+Singapore's 0.856 sounds like a strong endorsement; the underlying figure
 is **$308,611 of total trade spread over eight years**, roughly $39k/year.
-It cleared the bar because the bar is the median group ($49,736), and the
+It cleared the bar because the bar is the median group ($52,119), and the
 median product-country pair in this dataset is tiny. `volume_confidence`
 answers *"is this statistically substantial?"*, never *"is this
 commercially worthwhile?"* — for the latter, read the tons and FOB columns
@@ -381,11 +385,11 @@ confidence = (coverage_score * trend_r2_adj * volume_confidence) ^ (1/3)
 **Worked example.**
 
 ```
-(0.8 * 0.915100 * 0.861207) ^ (1/3) = 0.857
+(0.8 * 0.915100 * 0.855518) ^ (1/3) = 0.856
 ```
 
-**How to read it.** **An index on a 0–1 scale, not a probability.** 0.857
-does not mean "85.7% likely to be right"; it means all three evidence legs
+**How to read it.** **An index on a 0–1 scale, not a probability.** 0.856
+does not mean "85.6% likely to be right"; it means all three evidence legs
 are individually strong. Read it as a band rather than a precise value:
 
 | Range | Reading |
@@ -395,7 +399,7 @@ are individually strong. Read it as a band rather than a precise value:
 | below 0.40 | thin evidence — treat the score as a hypothesis only |
 
 Always look at which leg is *binding*. A confidence of 0.52 from
-`coverage 0.4 x fit 0.69 x volume 0.52` (Guyana, #2 in this ranking) is a
+`coverage 0.4 x fit 0.69 x volume 0.50` (Guyana, #2 in this ranking) is a
 short-history problem first — four active periods of ten — and the
 remedy, waiting for more years, is different from the remedy for a weak
 fit or a tiny market.
@@ -427,11 +431,11 @@ Which pivots with the lens:
 - product fixed → this country's share of that product's exports
 - country fixed → this product's share of that country's purchases
 
-**Worked example.** From Sep 2025 to Aug 2026, Brazil exported $49,040,432
+**Worked example.** From Sep 2025 to Aug 2026, Brazil exported $49,039,992
 of frozen livers in total. Singapore took $105,237:
 
 ```
-105,237 / 49,040,432 = 0.00215  →  0.21%
+105,237 / 49,039,992 = 0.00215  →  0.21%
 ```
 
 For contrast, Egypt took $30,054,566 of that same total — **61.3%**.
@@ -537,9 +541,9 @@ top-ranked newcomer vs. the incumbent:
 
 | | Singapore | Egypt |
 | --- | --- | --- |
-| Rank by score | **#1** | #23 |
+| Rank by score | **#1** | #22 |
 | `opportunity_score` | 1.513 | 0.317 |
-| `confidence` | 0.857 | 0.876 |
+| `confidence` | 0.856 | 0.876 |
 | `annual_growth_pct` | +151.6% | +81.9% |
 | `share_pct` | 0.21% | 61.3% |
 | Total FOB in window | $308,611 | $83,991,851 |
@@ -554,7 +558,7 @@ that difference looks like in practice.
 
 The intended workflow follows from that:
 
-1. **Score** narrows 114 countries to a shortlist.
+1. **Score** narrows 113 countries to a shortlist.
 2. **Confidence** says which shortlist entries are backed by evidence.
 3. **Absolute tons and FOB** say which are worth a sales conversation.
 4. **The period-by-period history** shows whether the trend is still
@@ -583,16 +587,9 @@ opening, and the old trade was a different regime), but it is a judgement
 the formula makes silently. Any group with a multi-year gap inside the
 window deserves a look at its raw history before its growth is trusted.
 
-### Brazil appears as a destination country
-
-`Brazil` shows up as a frozen-liver *buyer* ($2,147 over 4 periods, ranked
-#3 by score) — re-imports or returned shipments inside ComexStat's export
-data. Small in value, but it is not a market, and it should probably be
-excluded at the marts layer.
-
 ### `K`'s bar is low
 
-At `K = $49,736` for the `ncm_code x country` grid, a market averaging
+At `K = $52,119` for the `ncm_code x country` grid, a market averaging
 $39k/year clears `volume_confidence = 0.86`. The formula is behaving as
 designed — the median product-country pair really is that small — but the
 label "volume confidence" oversells it. Reading it next to absolute tons
