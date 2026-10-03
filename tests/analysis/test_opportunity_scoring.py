@@ -334,6 +334,67 @@ def test_volume_confidence_uses_full_grid_not_just_fixed_product(
     assert volume_confidence_after < volume_confidence_before
 
 
+def _yearly(start_year: int, values: list[float], **fields: Any) -> list[dict[str, Any]]:
+    return [{"year": start_year + i, "fob_usd": v, **fields} for i, v in enumerate(values)]
+
+
+def test_tiny_leading_period_is_trimmed_before_the_fit(con: duckdb.DuckDBPyConnection) -> None:
+    """The Bahrain case: a $42 first period, then steady doubling. Left in,
+    the $42 -> $13,000 log jump dominates the slope; trimmed, the fit sees
+    the clean doubling only."""
+    _insert(
+        con,
+        _yearly(
+            2020, [42, 13_000, 26_000, 52_000, 104_000], ncm_code=PRODUCT_A, country="Tinyland"
+        ),
+    )
+
+    row = rank_markets(
+        con, product_level="ncm_code", product_value=PRODUCT_A, geo_level="country"
+    ).iloc[0]
+
+    assert row["years_active"] == 4
+    assert row["annual_growth_pct"] == pytest.approx(1.0)
+    assert row["trend_r2_adj"] == pytest.approx(1.0)
+    assert row["total_fob_usd"] == pytest.approx(13_000 + 26_000 + 52_000 + 104_000)
+
+
+def test_tiny_trailing_period_is_kept_so_a_collapse_still_shows(
+    con: duckdb.DuckDBPyConnection,
+) -> None:
+    """Trimming is leading-only: a market that collapses to almost nothing
+    in its latest period must still read as shrinking, not have the
+    collapse trimmed away."""
+    _insert(
+        con,
+        _yearly(2020, [1_000, 2_000, 4_000, 8_000, 10], ncm_code=PRODUCT_A, country="Fadeland"),
+    )
+
+    row = rank_markets(
+        con, product_level="ncm_code", product_value=PRODUCT_A, geo_level="country"
+    ).iloc[0]
+
+    assert row["years_active"] == 5
+    assert row["annual_growth_pct"] < 0
+
+
+def test_small_but_not_tiny_leading_period_is_kept(con: duckdb.DuckDBPyConnection) -> None:
+    """The Singapore case: a first period at ~4% of the median is a real,
+    small start, not noise - it stays in the fit."""
+    _insert(
+        con,
+        _yearly(
+            2020, [500, 13_000, 26_000, 52_000, 104_000], ncm_code=PRODUCT_A, country="Smalland"
+        ),
+    )
+
+    row = rank_markets(
+        con, product_level="ncm_code", product_value=PRODUCT_A, geo_level="country"
+    ).iloc[0]
+
+    assert row["years_active"] == 5
+
+
 def _monthly(
     first: tuple[int, int], last: tuple[int, int], fob_usd: float, **fields: Any
 ) -> list[dict[str, Any]]:

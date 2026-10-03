@@ -55,6 +55,13 @@ _PERIODIZED_SQL = """
     FROM marts.exports
 """
 
+# Leading periods worth less than this fraction of the group's median active
+# period are treated as noise and trimmed before the trend fit. In log space
+# a near-zero first value dominates the slope (e.g. $42 -> $13,080 is a bigger
+# step than $1M -> $100M). Leading only, so a recent collapse is never hidden;
+# 1% keeps genuinely small early ramps. See the ADR 0005 amendment (2026-10-03).
+_LEADING_TRIM_FRACTION = 0.01
+
 
 def latest_period_end(con: duckdb.DuckDBPyConnection) -> tuple[int, int]:
     """(year, month) of the latest month in marts.exports - where the most
@@ -189,6 +196,21 @@ def _score_opportunities(
                 {fixed_filter_sql}
             GROUP BY {ranked_col}, periods_ago
             HAVING sum(fob_usd) > 0
+        ),
+        flagged AS (
+            -- running count of substantial periods, oldest first: leading
+            -- tiny periods are the ones still at 0
+            SELECT
+                *,
+                count(*) FILTER (WHERE fob_usd >= ? * median_fob) OVER (
+                    PARTITION BY group_value
+                    ORDER BY periods_ago DESC
+                    ROWS UNBOUNDED PRECEDING
+                ) AS substantial_so_far
+            FROM (
+                SELECT *, median(fob_usd) OVER (PARTITION BY group_value) AS median_fob
+                FROM windowed
+            )
         )
         SELECT
             group_value,
@@ -199,11 +221,15 @@ def _score_opportunities(
             count(*)                                AS years_active,
             sum(fob_usd)                            AS total_fob_usd,
             sum(metric_ton)                         AS total_metric_ton
-        FROM windowed
+        FROM flagged
+        WHERE substantial_so_far > 0
         GROUP BY group_value
         HAVING count(*) >= ?
     """
-    trend = con.execute(trend_sql, [latest_idx, window_years, *fixed_params, min_years_active]).df()
+    trend = con.execute(
+        trend_sql,
+        [latest_idx, window_years, *fixed_params, _LEADING_TRIM_FRACTION, min_years_active],
+    ).df()
 
     if trend.empty:
         return pd.DataFrame(columns=[ranked_col, *_OUTPUT_COLUMNS])

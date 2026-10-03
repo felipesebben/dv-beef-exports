@@ -227,8 +227,44 @@ Trade-off accepted: period boundaries move every month as data lands, so
 sparse markets (one or two shipments a year) can shift between periods
 from one pull to the next. This exposed one known distortion — a tiny
 first period inflating log-linear growth (Bahrain, frozen livers) — which
-is documented in `docs/analysis-methodology.md` and not yet addressed.
+is documented in `docs/analysis-methodology.md` and addressed by the next
+amendment.
+
+## Amendment (2026-10-03): trim leading tiny periods before the fit
+In log space a near-zero first value dominates the slope. Frozen livers →
+Bahrain started with a $42 period (two shipments of $22 and $20), then
+$13k–$102k; that one point made it the #1 opportunity at +379%/yr.
+
+Decision: before the fit, **drop leading periods worth less than 1% of the
+group's median active period** (`_LEADING_TRIM_FRACTION = 0.01`). Trimmed
+periods are noise, not activity — excluded from `years_active`, the fit,
+and the window totals. Bahrain → +70%/yr, #8. Across the `ncm_code x
+country` grid, 16 of 727 groups change.
+
+Options considered (all tested against the full real grid):
+- **Floor on every period** (drop any period under X% of the median):
+  rejected — it also drops tiny *recent* periods, which hides collapses
+  (Thailand offal went from −26% to +20%/yr by deleting its $77 latest
+  period). Exactly the wrong direction for a tool meant to find
+  consistent evidence.
+- **Theil–Sen (median of pairwise slopes)**: barely helped Bahrain
+  (+379% → +319%) while shifting 558 of 727 groups, and leaves `trend_r2`
+  describing a different line than the reported slope.
+- **Leading-only trim at 5% / 10%**: start erasing genuinely small early
+  ramps (Singapore's $524 first period is 3.7% of its median) and drop
+  8–9 groups below the 4-period floor.
+- **Leading-only trim at 1%** (chosen): fixes the noise cases, leaves real
+  small starts alone, and can never hide a recent collapse.
+
+Relative to the group's own median, not an absolute dollar floor, so it
+behaves the same at every aggregation level. Known side effect: after a
+multi-year gap, old-but-real periods can fall under 1% of a much larger
+recent median and be trimmed, so the fit sees only the recent ramp
+(boneless beef → Mexico: +205% → +513%/yr). Documented in
+`docs/analysis-methodology.md`; arguably a correct reading of a market
+reopening, but a silent one.
 
 ## Status
 Accepted, 2026-09-12. Amended 2026-09-12 (adjusted R² + `years_active >= 4`
 floor, above). Amended 2026-10-03 (trailing 12-month periods, above).
+Amended 2026-10-03 (leading-tiny-period trim, above).
