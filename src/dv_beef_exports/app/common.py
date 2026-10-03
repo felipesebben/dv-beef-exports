@@ -6,6 +6,7 @@ the query itself, and display labels/formats.
 
 from __future__ import annotations
 
+import altair as alt
 import duckdb
 import pandas as pd
 import streamlit as st
@@ -94,6 +95,41 @@ CATEGORY_PHRASES = {
     "salted_dried": "salted and dried beef",
     "processed": "processed beef",
 }
+# Chart chrome is deliberately recessive, so the ink goes to the data:
+# hairline gridlines on the value axis only, no ticks, muted axis text, and
+# axis titles anchored at the tip of the axis rather than its middle.
+CHART_INK = "#52514e"
+CHART_MUTED = "#898781"
+CHART_GRID = "#ecebe7"
+CHART_DOMAIN = "#d5d4ce"
+
+
+def style_chart(chart: alt.TopLevelMixin) -> alt.TopLevelMixin:
+    """Apply the app's shared chart style. Call on the finished (layered)
+    chart, right before st.altair_chart."""
+    return (
+        chart.configure_axis(
+            grid=True,
+            gridColor=CHART_GRID,
+            gridWidth=1,
+            domainColor=CHART_DOMAIN,
+            ticks=False,
+            labelColor=CHART_MUTED,
+            labelFontSize=11,
+            labelPadding=6,
+            titleColor=CHART_INK,
+            titleFontSize=11,
+            titleFontWeight="normal",
+            titleAnchor="end",
+            titlePadding=10,
+        )
+        # categories (bars, heatmap rows/columns) never get gridlines
+        .configure_axisBand(grid=False)
+        .configure_view(strokeWidth=0)
+        .configure_legend(labelColor=CHART_INK, titleColor=CHART_INK, labelFontSize=11)
+    )
+
+
 # trade_bloc (unlike region) only covers 4 named blocs - most countries
 # belong to none, which surfaces as a null group, not a bug.
 NO_BLOC_LABEL = "(no bloc)"
@@ -156,23 +192,57 @@ def product_phrase(level: str, value: str | None) -> str:
     return CATEGORY_PHRASES[value]
 
 
+@st.cache_data
+def product_scope_options(_con: duckdb.DuckDBPyConnection) -> list[tuple[str, str | None, str]]:
+    """(level, value, label) for the overview page's product picker: all
+    beef, then each category, then each NCM product."""
+    options = [("overall", None, "All beef products")]
+    options += [
+        ("category", value, f"Category: {CATEGORY_PHRASES[value]}")
+        for value, _ in product_options(_con, "category")
+    ]
+    options += [("ncm_code", code, label) for code, label in product_options(_con, "ncm_code")]
+    return options
+
+
+@st.cache_data
+def market_scope_options(_con: duckdb.DuckDBPyConnection) -> list[tuple[str, str | None, str]]:
+    """(level, value, label) for the overview page's market picker: all
+    markets, then regions, trade blocs, and countries."""
+    options = [("overall", None, "All markets")]
+    options += [("region", v, f"Region: {v}") for v in geo_options(_con, "region")]
+    options += [("trade_bloc", v, f"Trade bloc: {v}") for v in geo_options(_con, "trade_bloc")]
+    options += [("country", v, v) for v in geo_options(_con, "country")]
+    return options
+
+
 def geo_label(level: str, value: str | None) -> str:
     if level == "overall":
         return "all markets"
     return value if value is not None else NO_BLOC_LABEL
 
 
+def _keep(name: str) -> dict:
+    """Widget kwargs that keep a sidebar value for the whole session - the
+    sidebar isn't rendered on the overview page, and without this Streamlit
+    would reset the query when the user comes back."""
+    return {"key": f"query_{name}", "persist_state": "session"}
+
+
 def sidebar_controls(con: duckdb.DuckDBPyConnection) -> dict:
     st.sidebar.header("Query")
-    lens = st.sidebar.radio("Lens", ["Product → Markets", "Country → Products"])
+    lens = st.sidebar.radio("Lens", ["Product → Markets", "Country → Products"], **_keep("lens"))
 
-    window_years = st.sidebar.slider("Trailing window (years)", min_value=4, max_value=25, value=10)
+    window_years = st.sidebar.slider(
+        "Trailing window (years)", min_value=4, max_value=25, value=10, **_keep("window_years")
+    )
     min_years_active = st.sidebar.slider(
         "Minimum active years",
         min_value=4,
         max_value=window_years,
         value=4,
         help="Adjusted R² is unstable below ~4 active years (ADR 0005 amendment).",
+        **_keep("min_years_active"),
     )
 
     if lens == "Product → Markets":
@@ -181,17 +251,24 @@ def sidebar_controls(con: duckdb.DuckDBPyConnection) -> dict:
             list(PRODUCT_LEVELS),
             index=list(PRODUCT_LEVELS).index("overall"),
             format_func=lambda lvl: PRODUCT_LEVEL_LABELS[lvl],
+            **_keep("markets_product_level"),
         )
         product_value = None
         if product_level != "overall":
             options = product_options(con, product_level)
             product_value = st.sidebar.selectbox(
-                "Product", options, format_func=lambda pair: pair[1]
+                "Product",
+                options,
+                format_func=lambda pair: pair[1],
+                **_keep(f"markets_product_{product_level}"),
             )[0]
 
         geo_choices = [lvl for lvl in GEO_LEVELS if lvl != "overall"]
         geo_level = st.sidebar.selectbox(
-            "Rank markets by", geo_choices, format_func=lambda lvl: GEO_LEVEL_LABELS[lvl]
+            "Rank markets by",
+            geo_choices,
+            format_func=lambda lvl: GEO_LEVEL_LABELS[lvl],
+            **_keep("markets_geo_level"),
         )
         return {
             "mode": "markets",
@@ -207,17 +284,19 @@ def sidebar_controls(con: duckdb.DuckDBPyConnection) -> dict:
         list(GEO_LEVELS),
         index=list(GEO_LEVELS).index("overall"),
         format_func=lambda lvl: GEO_LEVEL_LABELS[lvl],
+        **_keep("products_geo_level"),
     )
     geo_value = None
     if geo_level != "overall":
         options = geo_options(con, geo_level)
-        geo_value = st.sidebar.selectbox("Market", options)
+        geo_value = st.sidebar.selectbox("Market", options, **_keep(f"products_geo_{geo_level}"))
 
     product_choices = [lvl for lvl in PRODUCT_LEVELS if lvl != "overall"]
     product_level = st.sidebar.selectbox(
         "Rank products by",
         product_choices,
         format_func=lambda lvl: PRODUCT_LEVEL_LABELS[lvl],
+        **_keep("products_product_level"),
     )
     return {
         "mode": "products",

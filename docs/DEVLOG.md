@@ -141,3 +141,28 @@ something worth remembering (see `docs/WORKFLOW.md`).
   methodology doc's quick-reference table.
 - Fixed the results table's "Total tons" column, broken since #21 by a
   stale `total_kg` label key.
+
+## 2026-10-03 — Market overview (Phase 2 complete)
+- `analysis/market_overview.py`: the descriptive metrics skipped earlier —
+  `market_trend()` (value, tons, $/t, destinations and YoY per 12-month
+  period) and `top_destinations_matrix()` (top destinations × products,
+  latest 12 months). Same rolling periods as the scores, so figures agree
+  across pages.
+- New landing page, **Market overview**: a plain-language headline that
+  splits value growth into volume vs. price (the last 12 months: value
+  +31% = volume +14% and price +15%; processed beef's +2% was *all*
+  price, with volume down 9%), four KPIs, a trend chart, and a
+  who-buys-what heatmap that warns when one destination dominates
+  (China: 53% of everything). The heatmap follows the trend chart's
+  value/volume/price picker, and each product column is coloured on its
+  own scale, so the darkest cell is that product's top buyer — a single
+  scale across products of very different size only showed that frozen
+  cuts are big.
+- One shared chart style (`common.style_chart()`) across every page:
+  hairline grid on the value axis only, no ticks, muted axis text, axis
+  titles at the tip of the axis — so the ink goes to the data. The trend
+  chart highlights and labels only its highest and lowest periods.
+- The overview has its own pickers, so the ranking sidebar is hidden there;
+  `persist_state="session"` keeps the sidebar query intact across the
+  visit (Streamlit otherwise resets widgets that aren't rendered).
+

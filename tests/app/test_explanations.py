@@ -8,16 +8,20 @@ import pytest
 from dv_beef_exports.app.explanations import (
     Selection,
     bottom_line,
+    concentration_note,
     explain_all,
     explain_confidence,
     explain_growth,
     explain_share,
     explain_unit_price,
+    growth_drivers,
     implied_typical_size,
     money,
+    overview_summary,
     plural,
     share_text,
     stalled_since,
+    tons,
 )
 
 SEL = Selection(
@@ -180,3 +184,68 @@ def test_bottom_line_flags_small_scale() -> None:
 
     assert "Mind the scale: about $38.6k a year" in small
     assert "Mind the scale" not in big
+
+
+def test_tons_formats_large_volumes_in_millions() -> None:
+    assert tons(4.258) == "4.3 t"
+    assert tons(182.2) == "182 t"
+    assert tons(3_151_011) == "3.15 million t"
+
+
+@pytest.mark.parametrize(
+    ("value", "volume", "price", "expected"),
+    [
+        (0.309, 0.135, 0.153, "half more beef shipped, half higher prices"),
+        (0.50, 0.05, 0.43, "mostly **higher prices**"),
+        (0.50, 0.43, 0.05, "mostly **more beef shipped**"),
+        (0.02, -0.09, 0.12, "the growth is **all price**"),
+        (0.10, 0.20, -0.08, "the growth is **all volume**"),
+        (-0.20, -0.10, -0.11, "**both** less beef and lower prices"),
+        (-0.05, -0.15, 0.12, "mainly **less beef shipped**"),
+        (-0.05, 0.10, -0.14, "mainly **lower prices**"),
+    ],
+)
+def test_growth_drivers(value: float, volume: float, price: float, expected: str) -> None:
+    assert expected in growth_drivers(value, volume, price)
+
+
+def _trend(**latest: float) -> pd.DataFrame:
+    row = {
+        "period_end": pd.Timestamp("2026-08-01"),
+        "fob_usd": 17.54e9,
+        "metric_ton": 3_151_011,
+        "destinations": 173,
+        "fob_yoy_pct": 0.309,
+        "ton_yoy_pct": 0.135,
+        "price_yoy_pct": 0.153,
+        **latest,
+    }
+    return pd.DataFrame([row])
+
+
+def test_overview_summary_headline_and_drivers() -> None:
+    text = overview_summary(_trend(), "Brazil's exports of beef to all markets")
+
+    assert "In the 12 months to Aug 2026, Brazil's exports of beef to all markets" in text
+    assert "**$17.5B** (3.15 million t) across **173** destination countries" in text
+    assert "Value +31%" in text
+
+
+def test_overview_summary_edge_cases() -> None:
+    nothing = overview_summary(_trend(fob_usd=0), "x")
+    no_prior = overview_summary(_trend(fob_yoy_pct=float("nan")), "x")
+    single = overview_summary(_trend(destinations=1), "x")
+
+    assert "recorded no sales" in nothing
+    assert "no comparison" in no_prior
+    assert "destination country." in single
+
+
+def test_concentration_note_only_when_one_destination_dominates() -> None:
+    dominated = pd.DataFrame(
+        {"destination": ["China", "China", "US"], "share_of_total": [0.50, 0.03, 0.10]}
+    )
+    spread = pd.DataFrame({"destination": ["A", "B"], "share_of_total": [0.2, 0.15]})
+
+    assert "**China alone took 53%**" in concentration_note(dominated, "country")
+    assert concentration_note(spread, "country") is None

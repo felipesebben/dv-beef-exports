@@ -35,6 +35,8 @@ can point us toward but not solve directly.
 
 ## Phase 3 — Prototype
 - Streamlit dashboard surfacing the Phase 2 metrics for internal use
+  (`app/`: market overview, opportunity ranking, and a plain-language
+  "explain the numbers" page)
 
 ## Phase 4 — Client discovery
 - Separate research effort: identifying actual importer companies within

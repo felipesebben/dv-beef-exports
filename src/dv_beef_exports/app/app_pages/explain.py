@@ -17,6 +17,7 @@ from dv_beef_exports.app.common import (
     geo_label,
     product_label,
     product_phrase,
+    style_chart,
 )
 from dv_beef_exports.app.explanations import Selection, bottom_line, explain_all
 
@@ -63,7 +64,7 @@ def _history_chart(history: pd.DataFrame, log_scale: bool) -> alt.LayerChart:
         alt.Tooltip("trend:Q", title="Trend for these 12 months (USD)", format="$,.0f"),
         alt.Tooltip("metric_ton:Q", title="Total tons in these 12 months", format=",.1f"),
     ]
-    bars = base.mark_bar(opacity=0.85).encode(
+    bars = base.mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
         y=alt.Y("fob_usd:Q", title="Total sold in the 12-month period (USD)", scale=y_scale),
         color=alt.Color("status:N", scale=colors, legend=legend),
         tooltip=tooltip,
@@ -77,7 +78,7 @@ def _history_chart(history: pd.DataFrame, log_scale: bool) -> alt.LayerChart:
         )
         .transform_calculate(legend_label=f"'{_TREND}'")
     )
-    return (bars + trend).properties(height=280)
+    return (bars + trend).properties(height=340)
 
 
 def _selection_for(row: pd.Series, rank: int, n_ranked: int, query: dict, window: str) -> Selection:
@@ -188,7 +189,9 @@ for explanation in explain_all(row, sel, history, result):
                 key="explain_history_scale",
                 help="Log scale makes small early years visible: each step up is 10x.",
             )
-            st.altair_chart(_history_chart(history, scale == "Log scale"), width="stretch")
+            st.altair_chart(
+                style_chart(_history_chart(history, scale == "Log scale")), width="stretch"
+            )
             latest = history.iloc[-1]
             latest_label = f"{latest['period_start']:%b %Y}–{latest['period_end']:%b %Y}"
             st.caption(
