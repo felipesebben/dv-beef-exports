@@ -180,3 +180,22 @@ something worth remembering (see `docs/WORKFLOW.md`).
   ComexStat records declared destinations, which makes Turkey's
   opportunity score suspect (Brazil reports 24x more frozen boneless beef
   to Turkey than Turkey reports receiving).
+
+## 2026-10-03 — Automated monthly refresh (Phase 1's last piece)
+- `ingestion/refresh.py` + `.github/workflows/refresh.yml`: weekly check
+  for a newly published month; re-pulls the previous year through the
+  newest month, gates the result, and opens a PR with the refreshed
+  DuckDB file (needs the `REFRESH_PAT` secret - see ADR 0003).
+- Testing the plan live overturned three assumptions:
+  - **ComexStat revises published months and can delete rows** (June
+    2026 lost a row three months on). Staging's "most recent pull per
+    key" kept the deleted row's stale copy forever - the tracked DB
+    carried one phantom $985 row. Staging now treats the newest pull
+    *covering* a month as authoritative, via a new `raw.pulls` log.
+  - **Pulls are ordered by `pull_seq`, not `fetched_at`** - two pulls in
+    the same clock tick share a timestamp (caught by a test that only
+    failed under PowerShell).
+  - **MDIC's totals file can't gate our scope** (all-product yearly
+    totals, broken TLS chain). The gate instead checks our per-country
+    rows against ComexStat's own per-code totals - zero mismatches live.
+- ADRs 0003 and 0004 amended accordingly.

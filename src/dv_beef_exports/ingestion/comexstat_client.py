@@ -127,7 +127,23 @@ def fetch_ncm_hierarchy(ncm_code: str, language: str = "en") -> dict[str, Any] |
     return matches[0] if matches else None
 
 
-def _handle_response(response: requests.Response) -> list[dict[str, Any]]:
+def fetch_latest_period() -> tuple[int, int, str]:
+    """The newest month ComexStat has published, via GET /general/dates/updated.
+
+    Returns (year, month, updated) - e.g. (2026, 8, "2026-09-04"): August
+    2026 is the latest month available, published on 2026-09-04. Response
+    shape confirmed live 2026-10-03: {"data": {"updated": "2026-09-04",
+    "year": "2026", "monthNumber": "08"}, "success": true, ...}.
+    """
+    data = _get_data("/general/dates/updated")
+    try:
+        return int(data["year"]), int(data["monthNumber"]), data["updated"]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ComexStatError(f"Unexpected /general/dates/updated shape: {exc}") from exc
+
+
+def _handle_response(response: requests.Response) -> Any:
+    """The response's `data` payload, or a ComexStat error."""
     if response.status_code == 403:
         raise ComexStatTransientError("ComexStat returned 403 (likely a soft Cloudflare block)")
     if response.status_code == 429:
@@ -143,7 +159,14 @@ def _handle_response(response: requests.Response) -> list[dict[str, Any]]:
         raise ComexStatError(f"ComexStat returned a non-JSON response: {exc}") from exc
 
     try:
-        return payload["data"]["list"]
+        return payload["data"]
+    except (KeyError, TypeError) as exc:
+        raise ComexStatError(f"Unexpected response shape from ComexStat: {exc}") from exc
+
+
+def _data_list(data: Any) -> list[dict[str, Any]]:
+    try:
+        return data["list"]
     except (KeyError, TypeError) as exc:
         raise ComexStatError(f"Unexpected response shape from ComexStat: {exc}") from exc
 
@@ -167,7 +190,12 @@ def _post_general(body: dict[str, Any]) -> list[dict[str, Any]]:
         )
     except requests.RequestException as exc:
         raise ComexStatTransientError(f"Network error calling ComexStat: {exc}") from exc
-    return _handle_response(response)
+    return _data_list(_handle_response(response))
+
+
+def _get_tables(path: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+    # retried inside _get_data - not here too, or failures would retry squared
+    return _data_list(_get_data(path, params))
 
 
 @retry(
@@ -178,7 +206,8 @@ def _post_general(body: dict[str, Any]) -> list[dict[str, Any]]:
     ),
     reraise=True,
 )
-def _get_tables(path: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+def _get_data(path: str, params: dict[str, Any] | None = None) -> Any:
+    """GET any endpoint on the API host and return its `data` payload."""
     try:
         response = requests.get(
             f"{BASE_URL}{path}",

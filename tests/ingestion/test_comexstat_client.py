@@ -1,5 +1,6 @@
 """Tests for the ComexStat API client."""
 
+import pytest
 import tenacity
 
 from dv_beef_exports.ingestion import comexstat_client
@@ -11,6 +12,7 @@ from dv_beef_exports.ingestion.comexstat_client import (
     fetch_country_blocs,
     fetch_economic_blocks,
     fetch_exports,
+    fetch_latest_period,
     fetch_ncm_hierarchy,
 )
 
@@ -182,7 +184,7 @@ def test_fetch_ncm_hierarchy_returns_none_when_not_found(requests_mock) -> None:
 
 
 def test_get_tables_retries_on_rate_limit_then_succeeds(requests_mock, monkeypatch) -> None:
-    monkeypatch.setattr(comexstat_client._get_tables.retry, "wait", tenacity.wait_none())
+    monkeypatch.setattr(comexstat_client._get_data.retry, "wait", tenacity.wait_none())
     rows = [{"id": "105", "text": "Brazil"}]
     requests_mock.get(
         f"{BASE_URL}/tables/countries",
@@ -192,4 +194,41 @@ def test_get_tables_retries_on_rate_limit_then_succeeds(requests_mock, monkeypat
     result = fetch_countries()
 
     assert result == rows
+    assert requests_mock.call_count == 2
+
+
+def test_fetch_latest_period_parses_the_live_response_shape(requests_mock) -> None:
+    # shape confirmed with a live call, 2026-10-03
+    requests_mock.get(
+        f"{BASE_URL}/general/dates/updated",
+        json={
+            "data": {"updated": "2026-09-04", "year": "2026", "monthNumber": "08"},
+            "success": True,
+            "message": None,
+            "processo_info": None,
+            "language": "pt",
+        },
+    )
+
+    assert fetch_latest_period() == (2026, 8, "2026-09-04")
+
+
+def test_fetch_latest_period_rejects_an_unexpected_shape(requests_mock) -> None:
+    requests_mock.get(f"{BASE_URL}/general/dates/updated", json={"data": {"year": "2026"}})
+
+    with pytest.raises(ComexStatError, match="dates/updated"):
+        fetch_latest_period()
+
+
+def test_fetch_latest_period_retries_on_rate_limit(requests_mock, monkeypatch) -> None:
+    monkeypatch.setattr(comexstat_client._get_data.retry, "wait", tenacity.wait_none())
+    requests_mock.get(
+        f"{BASE_URL}/general/dates/updated",
+        [
+            {"status_code": 429},
+            {"json": {"data": {"updated": "2026-10-06", "year": "2026", "monthNumber": "09"}}},
+        ],
+    )
+
+    assert fetch_latest_period() == (2026, 9, "2026-10-06")
     assert requests_mock.call_count == 2

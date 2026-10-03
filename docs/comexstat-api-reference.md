@@ -50,9 +50,20 @@ guessing on shape, even where the params are solid.
   last update available for query... monthly export/import data going
   back to 1997." This is the endpoint `docs/decisions/0003-storage-and-
   automation-strategy.md` names for gating the scheduled refresh (poll
-  this, exit if nothing new). Response shape unconfirmed (see caveat
-  above) — worth one live call when actually building that automation
-  step, not worth guessing at now.
+  this, exit if nothing new). **Response confirmed live 2026-10-03:**
+  `{"data": {"updated": "2026-09-04", "year": "2026", "monthNumber": "08"},
+  "success": true, ...}` - the newest published month and when it was
+  published (`comexstat_client.fetch_latest_period()`).
+- **Published months get revised.** Re-pulling 2025-2026 on 2026-10-03
+  showed June 2026 had lost one row since a 2026-09-05 pull - see the ADR
+  0004 amendment for how the pipeline handles it.
+- **`/general` with `details=["ncm"]`** returns one row per NCM code and
+  month whose totals equal the sum of the per-country rows exactly
+  (verified for 2025-2026) - the refresh's reconciliation gate.
+- **MDIC's bulk-file host `balanca.economia.gov.br`** serves an incomplete
+  TLS chain (Python's `requests` refuses it), and its
+  `EXP_TOTAIS_CONFERENCIA.csv` is per-year all-product totals - not usable
+  to check our NCM scope.
 - **`GET /general/dates/years`** — no params. Earliest/latest year
   available for query.
 
