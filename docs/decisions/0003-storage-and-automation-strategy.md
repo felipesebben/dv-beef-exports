@@ -47,7 +47,40 @@ via `/general/dates/updated`). Plan:
 This is Phase 1's last piece, built after the ingestion client and DuckDB
 loader exist — not before.
 
+## Amendment (2026-10-03): the automation as built
+Building the refresh (`ingestion/refresh.py`, `.github/workflows/refresh.yml`)
+tested this ADR's assumptions live, and two didn't hold.
+
+**`EXP_TOTAIS_CONFERENCIA.csv` can't be the quality gate.** It holds one
+row per *year* with totals for *all* of Brazil's exports - every product
+($348B in 2025) - and is a checksum for MDIC's bulk CSV files, not a check
+on our 11 beef NCM codes. Its host (`balanca.economia.gov.br`) also serves an
+incomplete TLS certificate chain, so a verifying client refuses it. Replaced
+by a check against the API itself: for every (NCM code, month) re-pulled,
+our per-country rows must add up exactly to ComexStat's own per-code total,
+fetched by a second, coarser `/general` query (`details=["ncm"]`). Verified
+live: zero mismatches across 2025-2026. A mismatch means a truncated or
+partial pull and fails the run (no PR). Two softer signals go into the PR
+body instead: a new month far outside the previous 12 months' range
+(0.4x-2.5x the median) is flagged, and every revised month is listed.
+
+**`/general/dates/updated` confirmed** (live, 2026-10-03):
+`{"data": {"updated": "2026-09-04", "year": "2026", "monthNumber": "08"}}` -
+the newest published month and its publication date.
+
+**PRs need a fine-grained token, not `GITHUB_TOKEN`.** Pushes and PRs made
+with the built-in token deliberately don't trigger other workflows, so CI
+would never run on the refresh PR and branch protection would block it. The
+workflow uses a repository secret `REFRESH_PAT`: a fine-grained personal
+access token scoped to this repo, with Contents and Pull requests
+read/write. Free (as are Actions minutes on a public repo); needs renewing
+when it expires.
+
+The rest stands: weekly schedule (Mondays 12:00 UTC) plus manual dispatch
+with an optional `force`, exit early when nothing new is published, and
+manual review of the refresh PRs before considering auto-merge.
+
 ## Status
-Accepted, 2026-08-31.
+Accepted, 2026-08-31. Amended 2026-10-03 (gate, token; above).
 
 See `docs/comexstat-api-reference.md` for the confirmed `/general/dates/updated` params (none) and caveats (response body shape isn't documented in the spec — confirm with a live call before wiring the automation step).

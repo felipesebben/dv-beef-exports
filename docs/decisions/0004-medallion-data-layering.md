@@ -94,5 +94,32 @@ dimensions change far less often than trade data does. Schema/table design
 for this is deferred to when `duckdb_loader.py` actually gets restructured
 per this ADR, not decided yet.
 
+## Amendment (2026-10-03): ComexStat does revise, and can delete rows
+The open question above is answered: **ComexStat revises published months,
+further back than one month, and revisions can remove rows.** Seen live:
+between a pull on 2026-09-05 and one on 2026-10-03, June 2026 lost one
+(product, country) row ($985). Two consequences:
+
+- **The refresh re-pulls a trailing window,** not just the latest stored
+  month: the previous calendar year through the newest published month
+  (`REVISION_WINDOW_YEARS = 1` in `ingestion/refresh.py`; 2 API calls).
+- **"Most recent pull per key" was wrong for deletions.** A key the newer
+  pull no longer returns has no newer row to replace it, so its stale copy
+  survived in `staging` - and had: the tracked database carried that
+  phantom June row. `staging` now treats, for each (NCM code, month), the
+  most recent pull that *covered* it as authoritative: rows from older
+  pulls of that month are dropped, including keys the newer pull didn't
+  return.
+
+That needs coverage, not just rows, so `raw` gains **`raw.pulls`**: one row
+per pull - including pulls that returned nothing ("this period had nothing"
+is coverage too) - with its requested codes and period, row count, and a
+`pull_seq` that orders pulls. Ordering uses `pull_seq`, not `fetched_at`:
+two pulls in the same clock tick (Windows' clock is coarse) share a
+timestamp, which made "newest wins" ambiguous - caught by an intermittent
+test. `raw.pulls` is reconstructed from `raw.exports` for pulls that predate
+it, on every connection and before every staging build. `raw` is still
+append-only; nothing is ever deleted from it.
+
 ## Status
-Accepted, 2026-09-01.
+Accepted, 2026-09-01. Amended 2026-10-03 (revisions, `raw.pulls`; above).

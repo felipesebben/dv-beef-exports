@@ -482,3 +482,103 @@ def test_build_marts_keeps_rows_with_no_country_code(tmp_path: Path) -> None:
 
     assert con.execute("SELECT count(*) FROM marts.exports").fetchone() == (1,)
     con.close()
+
+
+def _row(country: str, month: str = "02", fob: str = "100") -> dict:
+    return {**CHINA_FEB_2024, "country": country, "monthNumber": month, "metricFOB": fob}
+
+
+def test_a_newer_pull_of_a_month_drops_rows_it_no_longer_returns(tmp_path: Path) -> None:
+    """ComexStat revises published months and can remove rows (seen live:
+    June 2026 lost a row between pulls). The newest pull covering a month
+    is authoritative, so a key it no longer returns must drop out."""
+    con = _connect(tmp_path)
+    ingest_raw(con, [_row("China"), _row("Chile")], ["02023000"], "2024-01", "2024-03")
+    ingest_raw(con, [_row("China", fob="150")], ["02023000"], "2024-02", "2024-02")
+
+    build_staging(con)
+
+    rows = con.execute("SELECT country, fob_usd FROM staging.exports").fetchall()
+    assert rows == [("China", 150)]
+    con.close()
+
+
+def test_a_newer_pull_only_overrides_the_months_and_codes_it_covered(tmp_path: Path) -> None:
+    con = _connect(tmp_path)
+    ingest_raw(
+        con,
+        [_row("China", "01"), _row("Chile", "02"), {**_row("Peru", "01"), "coNcm": "02062200"}],
+        ["02023000", "02062200"],
+        "2024-01",
+        "2024-02",
+    )
+    # re-pulls January for boneless beef only, and returns no Chile row
+    ingest_raw(con, [_row("China", "01", fob="999")], ["02023000"], "2024-01", "2024-01")
+
+    build_staging(con)
+
+    rows = con.execute(
+        "SELECT ncm_code, country, month, fob_usd FROM staging.exports ORDER BY 1, 2"
+    ).fetchall()
+    assert rows == [
+        ("02023000", "Chile", 2, 100),  # February: not re-pulled, kept
+        ("02023000", "China", 1, 999),  # January: newer pull wins
+        ("02062200", "Peru", 1, 100),  # livers: not in the newer pull's codes, kept
+    ]
+    con.close()
+
+
+def test_an_empty_pull_is_logged_and_clears_the_months_it_covered(tmp_path: Path) -> None:
+    con = _connect(tmp_path)
+    ingest_raw(con, [_row("China")], ["02023000"], "2024-02", "2024-02")
+
+    inserted = ingest_raw(con, [], ["02023000"], "2024-02", "2024-02")
+    build_staging(con)
+
+    assert inserted == 0
+    assert con.execute("SELECT count(*), sum(row_count) FROM raw.pulls").fetchone() == (2, 1)
+    assert con.execute("SELECT count(*) FROM staging.exports").fetchone() == (0,)
+    con.close()
+
+
+def test_get_connection_reconstructs_the_pull_log_for_older_raw_rows(tmp_path: Path) -> None:
+    """raw.pulls arrived after raw.exports already held the full backfill."""
+    db_path = tmp_path / "test.duckdb"
+    con = get_connection(db_path)
+    ingest_raw(con, [_row("China"), _row("Chile")], ["02023000"], "2024-01", "2024-03")
+    con.execute("DELETE FROM raw.pulls")  # simulate a pre-pulls database
+    con.close()
+
+    con = get_connection(db_path)
+
+    pulls = con.execute(
+        "SELECT requested_period_from, requested_period_to, row_count FROM raw.pulls"
+    ).fetchall()
+    assert pulls == [("2024-01", "2024-03", 2)]
+    con.close()
+
+
+def test_newest_pull_wins_even_with_identical_timestamps(tmp_path: Path, monkeypatch) -> None:
+    """Two pulls in the same clock tick share fetched_at (Windows' clock is
+    coarse) - ordering must come from pull_seq, not the timestamp."""
+    frozen = duckdb_loader.datetime.now(duckdb_loader.UTC)
+
+    class FrozenClock:
+        @staticmethod
+        def now(tz=None):
+            return frozen
+
+    monkeypatch.setattr(duckdb_loader, "datetime", FrozenClock)
+    con = _connect(tmp_path)
+    ingest_raw(con, [_row("China"), _row("Chile")], ["02023000"], "2024-02", "2024-02")
+    ingest_raw(con, [_row("China", fob="150")], ["02023000"], "2024-02", "2024-02")
+
+    build_staging(con)
+
+    assert con.execute("SELECT country, fob_usd FROM staging.exports").fetchall() == [
+        ("China", 150)
+    ]
+    assert con.execute("SELECT list(pull_seq ORDER BY pull_seq) FROM raw.pulls").fetchone() == (
+        [1, 2],
+    )
+    con.close()

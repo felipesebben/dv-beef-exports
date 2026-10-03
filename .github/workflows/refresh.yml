@@ -1,0 +1,92 @@
+name: ComexStat refresh
+
+# Weekly check for a newly published ComexStat month (MDIC publishes in the
+# first week of the following month, on no fixed day - so poll weekly rather
+# than guess). When there's new data it re-pulls, runs the quality gate, and
+# opens a PR with the refreshed DuckDB file for review. See
+# docs/decisions/0003 (amended 2026-10-03) and ingestion/refresh.py.
+#
+# Needs one repository secret, REFRESH_PAT: a fine-grained personal access
+# token for this repo only, with "Contents: read and write" and "Pull
+# requests: read and write". The built-in GITHUB_TOKEN can't be used -
+# pushes and PRs made with it don't trigger other workflows, so CI would
+# never run on the refresh PR and branch protection would block it.
+
+on:
+  schedule:
+    - cron: "0 12 * * 1" # Mondays 12:00 UTC (09:00 Brasília)
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Re-pull even if the database already has the latest month"
+        type: boolean
+        default: false
+
+concurrency:
+  group: comexstat-refresh
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the REFRESH_PAT secret is set
+        env:
+          REFRESH_PAT: ${{ secrets.REFRESH_PAT }}
+        run: |
+          if [ -z "$REFRESH_PAT" ]; then
+            echo "::error::Repository secret REFRESH_PAT is missing - see the comment at the top of refresh.yml."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.REFRESH_PAT }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Refresh from ComexStat
+        id: refresh
+        run: >-
+          uv run python -m dv_beef_exports.ingestion.refresh
+          --summary-path refresh_summary.md
+          ${{ inputs.force && '--force' || '' }}
+
+      - name: Show the summary on the run page
+        if: always()
+        run: |
+          if [ -f refresh_summary.md ]; then cat refresh_summary.md >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - name: Open or update the refresh PR
+        if: steps.refresh.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.REFRESH_PAT }}
+          LATEST: ${{ steps.refresh.outputs.latest }}
+        run: |
+          branch="data/comexstat-refresh-${LATEST}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add data/processed/comexstat.duckdb
+          git commit -m "data: ComexStat refresh through ${LATEST}"
+          # a re-run before the PR is merged replaces the branch, not stacks on it
+          git push --force origin "$branch"
+          if gh pr view "$branch" --json state --jq .state 2>/dev/null | grep -q OPEN; then
+            gh pr edit "$branch" --body-file refresh_summary.md
+          else
+            gh pr create --base main --head "$branch" \
+              --title "data: ComexStat refresh through ${LATEST}" \
+              --body-file refresh_summary.md
+          fi

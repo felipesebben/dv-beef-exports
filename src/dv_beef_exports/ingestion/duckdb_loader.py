@@ -85,6 +85,52 @@ _INSERT_RAW_SQL = """
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
+# One row per pull - including pulls that returned nothing - recording what
+# it COVERED (codes x period). build_staging() needs coverage, not just the
+# rows a pull happened to return: ComexStat revises published months and
+# can drop rows, and a row absent from a newer pull of its month must stop
+# counting (see the ADR 0004 amendment, 2026-10-03).
+# pull_seq orders pulls; fetched_at can't - two pulls in the same clock
+# tick (Windows' clock is coarse) get identical timestamps, and then
+# "newest pull wins" can't tell which one is newest.
+_CREATE_RAW_PULLS_SQL = """
+    CREATE TABLE IF NOT EXISTS raw.pulls (
+        pull_id                 UUID NOT NULL PRIMARY KEY,
+        pull_seq                BIGINT NOT NULL UNIQUE,
+        fetched_at              TIMESTAMPTZ NOT NULL,
+        requested_ncm_codes     VARCHAR[] NOT NULL,
+        requested_period_from   VARCHAR NOT NULL,
+        requested_period_to     VARCHAR NOT NULL,
+        requested_details       VARCHAR[] NOT NULL,
+        row_count               INTEGER NOT NULL
+    )
+"""
+
+# raw.pulls arrived after raw.exports - reconstruct the log for any pull
+# that predates it (idempotent: only pulls not logged yet).
+_BACKFILL_RAW_PULLS_SQL = """
+    INSERT INTO raw.pulls
+    SELECT
+        pull_id,
+        (SELECT coalesce(max(pull_seq), 0) FROM raw.pulls)
+            + row_number() OVER (ORDER BY min(fetched_at), pull_id),
+        any_value(fetched_at),
+        any_value(requested_ncm_codes),
+        any_value(requested_period_from),
+        any_value(requested_period_to),
+        any_value(requested_details),
+        count(*)
+    FROM raw.exports
+    WHERE pull_id NOT IN (SELECT pull_id FROM raw.pulls)
+    GROUP BY pull_id
+"""
+
+_INSERT_RAW_PULL_SQL = """
+    INSERT INTO raw.pulls
+    SELECT ?, coalesce(max(pull_seq), 0) + 1, ?, ?, ?, ?, ?, ?
+    FROM raw.pulls
+"""
+
 _CREATE_DIM_NCM_SQL = """
     CREATE TABLE IF NOT EXISTS staging.dim_ncm (
         ncm_code       VARCHAR NOT NULL PRIMARY KEY,
@@ -166,12 +212,26 @@ _BUILD_STAGING_SQL = """
         CAST(r.metric_kg AS BIGINT)     AS kg,
         r.pull_id                       AS source_pull_id
     FROM raw.exports r
+    JOIN raw.pulls rp ON rp.pull_id = r.pull_id
     JOIN staging.dim_ncm d ON d.ncm_code = r.co_ncm
     LEFT JOIN staging.dim_ncm_hierarchy h ON h.sh6_code = d.sh6_code
     LEFT JOIN staging.dim_country c ON c.name = r.country
+    -- a row only counts if no LATER pull covered its (code, month): the
+    -- latest pull covering a month is authoritative for it, so a row that
+    -- pull no longer returned (a revision dropped it) drops out here too.
+    -- Periods are 'YYYY-MM' and month_number is zero-padded, so they
+    -- compare correctly as text.
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM raw.pulls p
+        WHERE p.pull_seq > rp.pull_seq
+            AND list_contains(p.requested_ncm_codes, r.co_ncm)
+            AND r.year || '-' || r.month_number
+                BETWEEN p.requested_period_from AND p.requested_period_to
+    )
     QUALIFY ROW_NUMBER() OVER (
         PARTITION BY r.co_ncm, r.country, r.year, r.month_number
-        ORDER BY r.fetched_at DESC
+        ORDER BY rp.pull_seq DESC
     ) = 1
 """
 
@@ -241,6 +301,8 @@ def get_connection(db_path: Path = DB_PATH) -> duckdb.DuckDBPyConnection:
     con.execute("CREATE SCHEMA IF NOT EXISTS staging")
     con.execute("CREATE SCHEMA IF NOT EXISTS marts")
     con.execute(_CREATE_RAW_EXPORTS_SQL)
+    con.execute(_CREATE_RAW_PULLS_SQL)
+    con.execute(_BACKFILL_RAW_PULLS_SQL)
     _seed_dim_ncm(con)
     con.execute(_CREATE_DIM_NCM_HIERARCHY_SQL)
     con.execute(_CREATE_DIM_COUNTRY_SQL)
@@ -266,12 +328,14 @@ def ingest_raw(
     details: list[str] | None = None,
 ) -> int:
     """
-    Append fetched rows to raw.exports. Never deletes or overwrites
+    Append fetched rows to raw.exports, and log the pull - what it covered,
+    even if it returned nothing - in raw.pulls. Never deletes or overwrites
     existing rows, even for a period already stored — every call gets its
     own pull_id + fetched_at, shared by all rows it inserts, so
-    build_staging() can later pick the most recent pull per key. Re-running
-    this for the same NCM codes/period is expected to add duplicate raw
-    rows, not replace anything (see docs/decisions/0004).
+    build_staging() can later treat the most recent pull covering a month as
+    authoritative for it. Re-running this for the same NCM codes/period is
+    expected to add duplicate raw rows, not replace anything (see
+    docs/decisions/0004).
 
     Assumes rows are shaped as returned by comexstat_client.fetch_exports()
     with its default details=["country", "ncm"] grouping (coNcm, ncm,
@@ -294,11 +358,15 @@ def ingest_raw(
     if details is None:
         details = ["country", "ncm"]
 
-    if not rows:
-        return 0
-
     pull_id = uuid.uuid4()
     fetched_at = datetime.now(UTC)
+    # logged even when empty: "this period had nothing" is coverage too
+    con.execute(
+        _INSERT_RAW_PULL_SQL,
+        [pull_id, fetched_at, ncm_codes, period_from, period_to, details, len(rows)],
+    )
+    if not rows:
+        return 0
 
     records = [
         (
@@ -327,8 +395,11 @@ def build_staging(con: duckdb.DuckDBPyConnection) -> int:
     Rebuild staging.exports from raw.exports — a full replace, not
     incremental (raw is the only append-only layer; the data volume here
     is small enough that rebuilding from scratch is simpler than
-    incremental upsert logic, see docs/decisions/0004). Dedups to the most
-    recent raw pull per (ncm_code, country, year, month).
+    incremental upsert logic, see docs/decisions/0004). For each (ncm_code,
+    month), the most recent pull that COVERED it is authoritative (per
+    raw.pulls): its rows are kept, and rows from older pulls of that month
+    are dropped - including keys the newer pull no longer returned, which
+    is how a row ComexStat removes in a revision disappears here too.
 
     Joins staging.dim_ncm for name/category (required — always populated,
     see get_connection()), then LEFT JOINs staging.dim_ncm_hierarchy (via
@@ -341,6 +412,9 @@ def build_staging(con: duckdb.DuckDBPyConnection) -> int:
 
     Returns the row count of the rebuilt table.
     """
+    # staging JOINs raw.pulls: make sure every raw row's pull is logged,
+    # even rows that reached raw.exports without going through ingest_raw()
+    con.execute(_BACKFILL_RAW_PULLS_SQL)
     con.execute(_BUILD_STAGING_SQL)
     return con.execute("SELECT count(*) FROM staging.exports").fetchone()[0]
 
