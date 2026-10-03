@@ -10,12 +10,14 @@ import streamlit as st
 
 from dv_beef_exports.analysis.opportunity_scoring import METRIC_GLOSSARY, latest_period_end
 from dv_beef_exports.app.common import (
+    CHART_INK,
     COLUMN_FORMATS,
     COLUMN_LABELS,
     NO_BLOC_LABEL,
     PERCENT_COLUMNS,
     RANKED_COL_LABELS,
     connection,
+    style_chart,
 )
 
 
@@ -25,18 +27,13 @@ def _opportunity_chart(result: pd.DataFrame, ranked_col: str) -> alt.LayerChart:
         x=alt.X(
             "opportunity_score:Q",
             title="Opportunity score",
-            axis=alt.Axis(
-                gridColor="#e1e0d9",
-                domainColor="#c3c2b7",
-                labelColor="#898781",
-                titleColor="#52514e",
-            ),
         ),
         y=alt.Y(
             f"{ranked_col}:N",
             sort="-x",
             title=None,
-            axis=alt.Axis(labelColor="#0b0b0b", domain=False, ticks=False),
+            # country/product names are the data's identity: primary ink
+            axis=alt.Axis(labelColor="#0b0b0b", domain=False),
         ),
         tooltip=[
             alt.Tooltip(f"{ranked_col}:N", title=RANKED_COL_LABELS.get(ranked_col, ranked_col)),
@@ -47,7 +44,7 @@ def _opportunity_chart(result: pd.DataFrame, ranked_col: str) -> alt.LayerChart:
         ],
     )
     bars = base.mark_bar(color="#2a78d6", cornerRadiusEnd=4)
-    labels = base.mark_text(align="left", dx=4, color="#52514e").encode(
+    labels = base.mark_text(align="left", dx=4, color=CHART_INK).encode(
         text=alt.Text("opportunity_score:Q", format=".2f")
     )
     return (bars + labels).properties(height=alt.Step(22))
@@ -113,7 +110,7 @@ ranked_label = RANKED_COL_LABELS.get(ranked_col, ranked_col)
 result = result.assign(**{ranked_col: result[ranked_col].fillna(NO_BLOC_LABEL)})
 
 st.subheader("Top opportunities")
-st.altair_chart(_opportunity_chart(result, ranked_col), width="stretch")
+st.altair_chart(style_chart(_opportunity_chart(result, ranked_col)), width="stretch")
 
 st.subheader(f"All results ({len(result)})")
 display = result.copy()

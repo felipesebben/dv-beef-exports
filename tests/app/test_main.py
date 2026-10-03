@@ -17,15 +17,28 @@ from pathlib import Path
 from streamlit.testing.v1 import AppTest
 
 from dv_beef_exports.analysis.opportunity_scoring import _OUTPUT_COLUMNS
-from dv_beef_exports.app.common import COLUMN_FORMATS, COLUMN_LABELS, product_options
+from dv_beef_exports.app.common import (
+    COLUMN_FORMATS,
+    COLUMN_LABELS,
+    product_options,
+    product_scope_options,
+)
 from dv_beef_exports.ingestion.duckdb_loader import get_connection
 
 APP_PATH = str(Path(__file__).parents[2] / "src" / "dv_beef_exports" / "app" / "main.py")
 
 
-def _app() -> AppTest:
+def _overview() -> AppTest:
+    """The app as it opens: the market overview landing page."""
     at = AppTest.from_file(APP_PATH)
     at.run(timeout=30)
+    return at
+
+
+def _app() -> AppTest:
+    """The Opportunities page, where the sidebar query lives."""
+    at = _overview()
+    at.switch_page("app_pages/opportunities.py").run(timeout=30)
     return at
 
 
@@ -149,3 +162,59 @@ def test_explain_page_with_no_results_shows_info_not_a_crash() -> None:
     at = _explain_page(at)
 
     assert not at.exception
+
+
+def test_app_opens_on_market_overview_without_the_ranking_sidebar() -> None:
+    at = _overview()
+
+    assert not at.exception
+    assert at.title[0].value == "Market overview"
+    assert len(at.metric) == 4
+    assert any("came to" in m.value for m in at.markdown)
+    # the ranking query doesn't apply here, so its sidebar isn't rendered
+    assert len(at.sidebar.radio) == 0
+
+
+def test_overview_follows_its_own_product_picker() -> None:
+    at = _overview()
+    livers = next(o for o in product_scope_options(get_connection()) if o[1] == "02062200")
+
+    at.selectbox(key="overview_product").set_value(livers).run()
+
+    assert not at.exception
+    assert any("frozen livers" in m.value for m in at.markdown)
+
+
+def test_overview_alternate_matrix_axes_render() -> None:
+    at = _overview()
+
+    at.segmented_control(key="overview_rows").set_value("Regions").run()
+    at.segmented_control(key="overview_columns").set_value("Categories").run()
+    at.segmented_control(key="overview_measure").set_value("Average price ($/t)").run()
+
+    assert not at.exception
+
+
+def test_sidebar_query_survives_a_visit_to_the_overview() -> None:
+    at = _app()
+    at.sidebar.radio[0].set_value("Country → Products").run()
+
+    at.switch_page("app_pages/overview.py").run(timeout=30)
+    at.switch_page("app_pages/opportunities.py").run(timeout=30)
+
+    assert not at.exception
+    assert at.sidebar.radio[0].value == "Country → Products"
+
+
+def test_who_buys_what_follows_the_measure_picker() -> None:
+    at = _overview()
+
+    at.segmented_control(key="overview_measure").set_value("Volume (tons)").run()
+    volume_captions = [c.value for c in at.caption]
+    at.segmented_control(key="overview_measure").set_value("Destinations").run()
+    destination_captions = [c.value for c in at.caption]
+
+    assert not at.exception
+    assert any("biggest destinations by volume" in c for c in volume_captions)
+    # a per-cell destination count is meaningless, so the matrix falls back to value
+    assert any("showing value instead" in c for c in destination_captions)

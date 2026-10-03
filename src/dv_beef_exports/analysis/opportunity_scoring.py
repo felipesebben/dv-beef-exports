@@ -90,6 +90,40 @@ def latest_period_end(con: duckdb.DuckDBPyConnection) -> tuple[int, int]:
     ).fetchone()
 
 
+def latest_month_index(con: duckdb.DuckDBPyConnection) -> int:
+    """year * 12 + month - 1 of the latest month in marts.exports - the
+    parameter _PERIODIZED_SQL takes."""
+    return con.execute("SELECT max(year * 12 + month - 1) FROM marts.exports").fetchone()[0]
+
+
+def add_period_bounds(df: pd.DataFrame, latest_idx: int) -> pd.DataFrame:
+    """Add period_start / period_end (first day of each 12-month period's
+    first and last month) from a periods_ago column."""
+    end_idx = latest_idx - 12 * df["periods_ago"]
+    period_end = pd.to_datetime({"year": end_idx // 12, "month": end_idx % 12 + 1, "day": 1})
+    return df.assign(period_end=period_end, period_start=period_end - pd.DateOffset(months=11))
+
+
+def level_filters(
+    product_level: str, product_value: str | None, geo_level: str, geo_value: str | None
+) -> tuple[str, list]:
+    """SQL `AND col = ?` filters (and their parameters) narrowing
+    marts.exports to one product scope and one market scope. "overall"
+    means no filter on that axis, and takes no value."""
+    levels = ((PRODUCT_LEVELS, product_level, product_value), (GEO_LEVELS, geo_level, geo_value))
+    filters, params = [], []
+    for level_map, level, value in levels:
+        if level not in level_map:
+            raise ValueError(f"Unknown level {level!r}")
+        col = level_map[level]
+        if (col is None) != (value is None):
+            raise ValueError(f"a value is required for {level!r}, and only for it")
+        if col is not None:
+            filters.append(f"AND {col} = ?")
+            params.append(value)
+    return " ".join(filters), params
+
+
 def _trimmed_periods_ctes(group_expr: str, filter_sql: str) -> str:
     """The `windowed` and `flagged` CTEs shared by the scoring query and
     period_history(): one row per (group, 12-month period) in the window
@@ -150,21 +184,10 @@ def period_history(
     periods), trend_fob_usd (the fitted exponential trend, NaN when fewer
     than two periods are in the fit). Oldest period first.
     """
-    levels = ((PRODUCT_LEVELS, product_level, product_value), (GEO_LEVELS, geo_level, geo_value))
-    filters, params = [], []
-    for level_map, level, value in levels:
-        if level not in level_map:
-            raise ValueError(f"Unknown level {level!r}")
-        col = level_map[level]
-        if (col is None) != (value is None):
-            raise ValueError(f"a value is required for {level!r}, and only for it")
-        if col is not None:
-            filters.append(f"AND {col} = ?")
-            params.append(value)
-
-    latest_idx = con.execute("SELECT max(year * 12 + month - 1) FROM marts.exports").fetchone()[0]
+    filter_sql, params = level_filters(product_level, product_value, geo_level, geo_value)
+    latest_idx = latest_month_index(con)
     history_sql = f"""
-        WITH {_trimmed_periods_ctes("'group'", " ".join(filters))},
+        WITH {_trimmed_periods_ctes("'group'", filter_sql)},
         fit AS (
             SELECT
                 regr_slope(ln(fob_usd), -periods_ago)     AS slope,
@@ -188,11 +211,7 @@ def period_history(
         [latest_idx, window_years, *params, _LEADING_TRIM_FRACTION, window_years],
     ).df()
 
-    end_idx = latest_idx - 12 * history["periods_ago"]
-    history["period_end"] = pd.to_datetime(
-        {"year": end_idx // 12, "month": end_idx % 12 + 1, "day": 1}
-    )
-    history["period_start"] = history["period_end"] - pd.DateOffset(months=11)
+    history = add_period_bounds(history, latest_idx)
     return history[
         [
             "period_start",
@@ -313,7 +332,7 @@ def _score_opportunities(
     if fixed_col is not None and fixed_value is None:
         raise ValueError(f"a fixed_value is required for {fixed_level!r}")
 
-    latest_idx = con.execute("SELECT max(year * 12 + month - 1) FROM marts.exports").fetchone()[0]
+    latest_idx = latest_month_index(con)
 
     fixed_filter_sql = f"AND {fixed_col} = ?" if fixed_col else ""
     fixed_params = [fixed_value] if fixed_col else []

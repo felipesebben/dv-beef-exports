@@ -13,6 +13,7 @@ Pure Python, no Streamlit, so every sentence is unit-testable.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import pandas as pd
@@ -80,6 +81,9 @@ def money(usd: float) -> str:
 
 
 def tons(t: float) -> str:
+    """4.3 t, 182 t, 27,533 t, 3.15 million t."""
+    if t >= 1e6:
+        return f"{t / 1e6:.2f} million t"
     return f"{t:,.1f} t" if t < 10 else f"{t:,.0f} t"
 
 
@@ -537,3 +541,78 @@ def bottom_line(row: pd.Series, sel: Selection, history: pd.DataFrame) -> str:
     if per_year < 1e5:
         step += f" Mind the scale: about {money(per_year)} a year, small in absolute terms."
     return f"{summary}\n\n{step}"
+
+
+# --- Market overview page ---------------------------------------------------
+
+
+def growth_drivers(value_yoy: float, volume_yoy: float, price_yoy: float) -> str:
+    """Why value moved, in words: more beef shipped, higher prices, or both.
+
+    Value = volume x price, so on a log scale the two shares add up to the
+    whole change: price_share = ln(1 + price) / ln(1 + value).
+    """
+    v, q, p = f"{value_yoy * 100:+.0f}%", f"{volume_yoy * 100:+.0f}%", f"{price_yoy * 100:+.0f}%"
+    both = f"volume {q} and the average price {p}"
+    if value_yoy > 0 and volume_yoy > 0 and price_yoy > 0:
+        price_share = math.log1p(price_yoy) / math.log1p(value_yoy)
+        if price_share > 0.65:
+            why = "mostly **higher prices**, not more beef shipped"
+        elif price_share < 0.35:
+            why = "mostly **more beef shipped**, not higher prices"
+        else:
+            why = "roughly **half more beef shipped, half higher prices**"
+        return f"Value {v}: {both} - so the growth came {why}."
+    if value_yoy > 0 and volume_yoy <= 0:
+        return f"Value {v} even though volume fell ({q}) - the growth is **all price** ({p})."
+    if value_yoy > 0:
+        return f"Value {v} even though prices fell ({p}) - the growth is **all volume** ({q})."
+    if volume_yoy < 0 and price_yoy < 0:
+        return f"Value {v}: {both} - **both** less beef and lower prices."
+    if volume_yoy < 0:
+        return f"Value {v}: mainly **less beef shipped** ({q}), with the average price {p}."
+    return f"Value {v}: mainly **lower prices** ({p}), with volume {q}."
+
+
+def overview_summary(trend: pd.DataFrame, scope: str) -> str:
+    """The overview page's headline: the latest 12 months vs the 12 before,
+    with what drove the change. scope reads mid-sentence, e.g.
+    "Brazil's exports of frozen livers to all markets"."""
+    latest = trend.iloc[-1]
+    period = f"the 12 months to {latest['period_end']:%b %Y}"
+    if latest["fob_usd"] <= 0:
+        return f"Nothing in {period}: {scope} recorded no sales."
+    headline = (
+        f"In {period}, {scope} came to **{money(latest['fob_usd'])}** "
+        f"({tons(latest['metric_ton'])}) across **{int(latest['destinations'])}** "
+        f"destination {'country' if latest['destinations'] == 1 else 'countries'}."
+    )
+    if pd.isna(latest["fob_yoy_pct"]):
+        return f"{headline} There were no sales in the 12 months before, so no comparison."
+    drivers = growth_drivers(latest["fob_yoy_pct"], latest["ton_yoy_pct"], latest["price_yoy_pct"])
+    return f"{headline}\n\n{drivers}"
+
+
+def concentration_note(
+    matrix: pd.DataFrame,
+    destination_noun: str,
+    share_column: str = "share_of_total",
+    basis: str = "value",
+) -> str | None:
+    """A warning when one destination dominates - a dependency risk worth
+    knowing before planning around the totals. None when nothing dominates.
+    share_column / basis: which share to judge by ("value" or "volume")."""
+    shares = (
+        matrix.groupby("destination", sort=False)[share_column].sum().sort_values(ascending=False)
+    )
+    if shares.empty:
+        return None
+    top, share = shares.index[0], shares.iloc[0]
+    if share < 0.3:
+        return None
+    return (
+        f"**{top} alone took {pct(share)}** of everything in scope by {basis}. Totals and "
+        "trends "
+        f"here largely reflect that one {destination_noun} - a change in its demand moves "
+        "the whole picture."
+    )
