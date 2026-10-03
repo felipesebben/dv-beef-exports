@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 import math
+import re
+from pathlib import Path
 from typing import Any
 
 import duckdb
+import pandas as pd
 import pytest
 
 from dv_beef_exports.analysis.opportunity_scoring import (
+    _OUTPUT_COLUMNS,
     GEO_LEVELS,
+    METRIC_GLOSSARY,
     PRODUCT_LEVELS,
     latest_period_end,
+    period_history,
     rank_markets,
     rank_products,
 )
@@ -395,6 +401,50 @@ def test_small_but_not_tiny_leading_period_is_kept(con: duckdb.DuckDBPyConnectio
     assert row["years_active"] == 5
 
 
+def test_period_history_fills_gaps_flags_trimmed_periods_and_matches_the_score(
+    con: duckdb.DuckDBPyConnection,
+) -> None:
+    # $42 leading period (trimmed), then clean doubling with a gap year
+    _insert(
+        con,
+        _yearly(2019, [42, 13_000, 26_000, 0, 104_000, 208_000], ncm_code=PRODUCT_A, country="Gap"),
+    )
+
+    history = period_history(
+        con,
+        product_level="ncm_code",
+        product_value=PRODUCT_A,
+        geo_level="country",
+        geo_value="Gap",
+        window_years=8,
+    )
+
+    assert list(history["periods_ago"]) == [7, 6, 5, 4, 3, 2, 1, 0]
+    assert list(history["fob_usd"]) == [0, 0, 42, 13_000, 26_000, 0, 104_000, 208_000]
+    assert list(history["in_fit"]) == [False, False, False, True, True, False, True, True]
+    assert history["period_end"].iloc[-1] == pd.Timestamp("2024-12-01")
+    assert history["period_start"].iloc[-1] == pd.Timestamp("2024-01-01")
+
+    # the fitted trend's yearly ratio is the score's own growth rate
+    score = rank_markets(
+        con, product_level="ncm_code", product_value=PRODUCT_A, geo_level="country"
+    ).iloc[0]
+    trend = history["trend_fob_usd"]
+    assert trend.iloc[-1] / trend.iloc[-2] - 1 == pytest.approx(score["annual_growth_pct"])
+    assert trend.iloc[-1] / trend.iloc[-2] == pytest.approx(2.0)
+
+
+def test_period_history_validates_levels(con: duckdb.DuckDBPyConnection) -> None:
+    with pytest.raises(ValueError, match="Unknown level"):
+        period_history(
+            con, product_level="bogus", product_value=None, geo_level="overall", geo_value=None
+        )
+    with pytest.raises(ValueError, match="value is required"):
+        period_history(
+            con, product_level="ncm_code", product_value=None, geo_level="overall", geo_value=None
+        )
+
+
 def _monthly(
     first: tuple[int, int], last: tuple[int, int], fob_usd: float, **fields: Any
 ) -> list[dict[str, Any]]:
@@ -463,3 +513,20 @@ def test_share_pct_uses_latest_twelve_months_not_calendar_year(
     assert result.loc["Autumnland", "share_pct"] == pytest.approx(6000 / 18000)
     assert result.loc["Steadyland", "share_pct"] == pytest.approx(12000 / 18000)
     assert result.loc["Autumnland", "years_active"] == 4
+
+
+METHODOLOGY_DOC = Path(__file__).parents[2] / "docs" / "analysis-methodology.md"
+
+
+def test_metric_glossary_covers_every_output_column() -> None:
+    assert list(METRIC_GLOSSARY) == _OUTPUT_COLUMNS
+
+
+def test_metric_glossary_matches_methodology_doc_quick_reference() -> None:
+    """The app's column tooltips and the doc's quick-reference table must say
+    the same thing - edit both together, or this fails."""
+    doc = METHODOLOGY_DOC.read_text(encoding="utf-8")
+    section = doc.split("## Quick reference", 1)[1].split("\n## ", 1)[0]
+    rows = re.findall(r"^\| `(\w+)` \| (.+?) \|", section, flags=re.MULTILINE)
+
+    assert dict(rows) == METRIC_GLOSSARY

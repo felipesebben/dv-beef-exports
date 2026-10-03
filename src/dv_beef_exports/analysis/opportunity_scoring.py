@@ -45,6 +45,24 @@ _OUTPUT_COLUMNS = [
     "unit_price_usd_per_ton",
 ]
 
+# One-line meaning of every output column, shown as the app's column-header
+# tooltips. Must match the "Quick reference" table in
+# docs/analysis-methodology.md word for word - a test enforces it, so the
+# dashboard and the methodology doc can't drift apart.
+METRIC_GLOSSARY: dict[str, str] = {
+    "years_active": "12-month periods in the window with exports, after the leading trim",
+    "annual_growth_pct": "compound yearly growth from the fitted trend",
+    "trend_r2_adj": "how well one steady trend explains the history",
+    "coverage_score": "how complete the history is within the window",
+    "volume_confidence": "how large this group is vs. a typical one",
+    "confidence": "all three evidence legs combined (geometric mean)",
+    "share_pct": "slice of the fixed axis already held, latest 12 months",
+    "opportunity_score": "growth, discounted by share already held",
+    "total_fob_usd": "total export value in the window",
+    "total_metric_ton": "total export weight in the window",
+    "unit_price_usd_per_ton": "realised average price, sum-then-divide",
+}
+
 # marts.exports, with each row tagged by how many trailing 12-month periods
 # ago it falls: 0 = the 12 months ending at the latest month in the data,
 # 1 = the 12 months before that, etc. Periods instead of calendar years so
@@ -70,6 +88,122 @@ def latest_period_end(con: duckdb.DuckDBPyConnection) -> tuple[int, int]:
     return con.execute(
         "SELECT year, month FROM marts.exports ORDER BY year DESC, month DESC LIMIT 1"
     ).fetchone()
+
+
+def _trimmed_periods_ctes(group_expr: str, filter_sql: str) -> str:
+    """The `windowed` and `flagged` CTEs shared by the scoring query and
+    period_history(): one row per (group, 12-month period) in the window
+    with positive FOB, plus `substantial_so_far` - a running count of
+    periods worth >= the trim fraction of the group's median, oldest first.
+    Rows still at 0 are the leading tiny periods the fit trims.
+
+    Parameters, in order: latest month index, window_years, the filter's
+    own parameters, then the trim fraction.
+    """
+    return f"""
+        windowed AS (
+            SELECT
+                {group_expr}    AS group_value,
+                periods_ago,
+                sum(fob_usd)    AS fob_usd,
+                sum(metric_ton) AS metric_ton
+            FROM ({_PERIODIZED_SQL})
+            WHERE periods_ago < ?
+                {filter_sql}
+            GROUP BY {group_expr}, periods_ago
+            HAVING sum(fob_usd) > 0
+        ),
+        flagged AS (
+            -- running count of substantial periods, oldest first: leading
+            -- tiny periods are the ones still at 0
+            SELECT
+                *,
+                count(*) FILTER (WHERE fob_usd >= ? * median_fob) OVER (
+                    PARTITION BY group_value
+                    ORDER BY periods_ago DESC
+                    ROWS UNBOUNDED PRECEDING
+                ) AS substantial_so_far
+            FROM (
+                SELECT *, median(fob_usd) OVER (PARTITION BY group_value) AS median_fob
+                FROM windowed
+            )
+        )
+    """
+
+
+def period_history(
+    con: duckdb.DuckDBPyConnection,
+    *,
+    product_level: str,
+    product_value: str | None,
+    geo_level: str,
+    geo_value: str | None,
+    window_years: int = 10,
+) -> pd.DataFrame:
+    """One group's period-by-period history over the window - every
+    period, including ones with no exports - alongside the fitted trend the
+    score is built from. For explaining a score, not for scoring.
+
+    Returns columns: period_start, period_end (first day of each 12-month
+    period's first/last month), periods_ago, fob_usd, metric_ton (0 when
+    nothing was exported), in_fit (False for empty and leading-trimmed
+    periods), trend_fob_usd (the fitted exponential trend, NaN when fewer
+    than two periods are in the fit). Oldest period first.
+    """
+    levels = ((PRODUCT_LEVELS, product_level, product_value), (GEO_LEVELS, geo_level, geo_value))
+    filters, params = [], []
+    for level_map, level, value in levels:
+        if level not in level_map:
+            raise ValueError(f"Unknown level {level!r}")
+        col = level_map[level]
+        if (col is None) != (value is None):
+            raise ValueError(f"a value is required for {level!r}, and only for it")
+        if col is not None:
+            filters.append(f"AND {col} = ?")
+            params.append(value)
+
+    latest_idx = con.execute("SELECT max(year * 12 + month - 1) FROM marts.exports").fetchone()[0]
+    history_sql = f"""
+        WITH {_trimmed_periods_ctes("'group'", " ".join(filters))},
+        fit AS (
+            SELECT
+                regr_slope(ln(fob_usd), -periods_ago)     AS slope,
+                regr_intercept(ln(fob_usd), -periods_ago) AS intercept
+            FROM flagged
+            WHERE substantial_so_far > 0
+        )
+        SELECT
+            p.periods_ago,
+            coalesce(f.fob_usd, 0)                    AS fob_usd,
+            coalesce(f.metric_ton, 0)                 AS metric_ton,
+            coalesce(f.substantial_so_far > 0, false) AS in_fit,
+            exp(fit.intercept + fit.slope * -p.periods_ago) AS trend_fob_usd
+        FROM range(0, ?) p(periods_ago)
+        LEFT JOIN flagged f ON f.periods_ago = p.periods_ago
+        CROSS JOIN fit
+        ORDER BY p.periods_ago DESC
+    """
+    history = con.execute(
+        history_sql,
+        [latest_idx, window_years, *params, _LEADING_TRIM_FRACTION, window_years],
+    ).df()
+
+    end_idx = latest_idx - 12 * history["periods_ago"]
+    history["period_end"] = pd.to_datetime(
+        {"year": end_idx // 12, "month": end_idx % 12 + 1, "day": 1}
+    )
+    history["period_start"] = history["period_end"] - pd.DateOffset(months=11)
+    return history[
+        [
+            "period_start",
+            "period_end",
+            "periods_ago",
+            "fob_usd",
+            "metric_ton",
+            "in_fit",
+            "trend_fob_usd",
+        ]
+    ]
 
 
 def rank_markets(
@@ -185,33 +319,7 @@ def _score_opportunities(
     fixed_params = [fixed_value] if fixed_col else []
 
     trend_sql = f"""
-        WITH windowed AS (
-            SELECT
-                {ranked_col}    AS group_value,
-                periods_ago,
-                sum(fob_usd)    AS fob_usd,
-                sum(metric_ton) AS metric_ton
-            FROM ({_PERIODIZED_SQL})
-            WHERE periods_ago < ?
-                {fixed_filter_sql}
-            GROUP BY {ranked_col}, periods_ago
-            HAVING sum(fob_usd) > 0
-        ),
-        flagged AS (
-            -- running count of substantial periods, oldest first: leading
-            -- tiny periods are the ones still at 0
-            SELECT
-                *,
-                count(*) FILTER (WHERE fob_usd >= ? * median_fob) OVER (
-                    PARTITION BY group_value
-                    ORDER BY periods_ago DESC
-                    ROWS UNBOUNDED PRECEDING
-                ) AS substantial_so_far
-            FROM (
-                SELECT *, median(fob_usd) OVER (PARTITION BY group_value) AS median_fob
-                FROM windowed
-            )
-        )
+        WITH {_trimmed_periods_ctes(ranked_col, fixed_filter_sql)}
         SELECT
             group_value,
             -- x = -periods_ago so time runs forward: the slope is log

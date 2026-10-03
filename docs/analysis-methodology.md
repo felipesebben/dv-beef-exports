@@ -7,7 +7,10 @@ it answers, how it is computed, and how to read it without fooling yourself.
 records *why* these formulas were chosen and what was rejected; that debate
 is not repeated here. This document is the working reference — the thing to
 open when a number on the dashboard looks surprising, and the source of
-truth for the plain-language wording the Streamlit app shows users.
+truth for the plain-language wording the Streamlit app shows users. The
+app's **Explain the numbers** page is the business-reader version of this
+document: the same metrics, applied to whichever result the user picks,
+with an action for each (`app/explanations.py`).
 
 Every section follows the same five-part template, so a new metric can be
 added without redesigning the page:
@@ -631,6 +634,7 @@ Keep the five-part template, and specifically:
 5. Fill in **Where it misleads** honestly. Every metric here has a failure
    mode; a section without one is an unfinished section.
 
-Then add a row to [Quick reference](#quick-reference), and — if the app
-surfaces it — the same one-line meaning to the app's metric glossary, so
-the dashboard and this document cannot drift apart.
+Then add a row to [Quick reference](#quick-reference), and the same
+one-line meaning to `METRIC_GLOSSARY` in `analysis/opportunity_scoring.py`
+— the app shows it as that column's header tooltip. A test compares the
+two word for word, so the dashboard and this document cannot drift apart.
