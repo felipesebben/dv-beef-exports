@@ -199,3 +199,12 @@ something worth remembering (see `docs/WORKFLOW.md`).
     totals, broken TLS chain). The gate instead checks our per-country
     rows against ComexStat's own per-code totals - zero mismatches live.
 - ADRs 0003 and 0004 amended accordingly.
+
+## 2026-10-03 — Deployable to Streamlit Community Cloud
+- `docs/DEPLOY.md`: free deploy from `main`, restricted to invited viewers.
+- `DB_PATH` is now anchored to the code's location instead of the working
+  directory (a relative path would silently create an empty database
+  wherever the app happened to start), and `main.py` puts `src/` on the
+  import path since Community Cloud isn't documented to install the project.
+  Verified in a fresh environment without the package, from another folder.
+

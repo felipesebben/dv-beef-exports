@@ -33,7 +33,11 @@ from dv_beef_exports.ingestion.comexstat_client import (
 )
 from dv_beef_exports.ingestion.ncm_codes import BEEF_NCM_CODES
 
-DB_PATH = Path("data/processed/comexstat.duckdb")
+# Anchored to this file (src/dv_beef_exports/ingestion/ -> repo root), not the
+# working directory: a deployed app or scheduled job may start anywhere, and a
+# relative path would silently create a fresh, empty database there.
+REPO_ROOT = Path(__file__).resolve().parents[3]
+DB_PATH = REPO_ROOT / "data" / "processed" / "comexstat.duckdb"
 # ComexStat's /tables/economic-blocks mixes two different classification
 # types under one list, with no field distinguishing them (confirmed live,
 # 2026-09-05): 8 geographic regions (mutually exclusive per country) and

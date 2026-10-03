@@ -17,9 +17,19 @@ Run with: uv run streamlit run src/dv_beef_exports/app/main.py
 
 from __future__ import annotations
 
-import streamlit as st
+import sys
+from pathlib import Path
 
-from dv_beef_exports.app.common import connection, run_query, sidebar_controls
+# Streamlit Community Cloud installs the dependencies from uv.lock but isn't
+# documented to install this project itself - so put src/ on the import path,
+# letting `dv_beef_exports` import from the checkout either way.
+_SRC = str(Path(__file__).resolve().parents[2])
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
+
+import streamlit as st  # noqa: E402
+
+from dv_beef_exports.app.common import connection, run_query, sidebar_controls  # noqa: E402
 
 st.set_page_config(page_title="Beef Export Opportunities", layout="wide")
 
