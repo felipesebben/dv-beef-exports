@@ -11,6 +11,7 @@ import pytest
 from dv_beef_exports.analysis.opportunity_scoring import (
     GEO_LEVELS,
     PRODUCT_LEVELS,
+    latest_period_end,
     rank_markets,
     rank_products,
 )
@@ -31,6 +32,7 @@ def con() -> duckdb.DuckDBPyConnection:
             region     VARCHAR,
             trade_bloc VARCHAR,
             year       INTEGER,
+            month      INTEGER,
             fob_usd    DOUBLE,
             metric_ton DOUBLE
         )
@@ -40,11 +42,14 @@ def con() -> duckdb.DuckDBPyConnection:
 
 
 def _insert(con: duckdb.DuckDBPyConnection, rows: list[dict[str, Any]]) -> None:
+    # month defaults to 12: with every row in December, each trailing
+    # 12-month period lines up exactly with a calendar year, so yearly
+    # fixtures behave as if periods were plain calendar years.
     con.executemany(
         """
         INSERT INTO marts.exports
-            (ncm_code, category, country, region, trade_bloc, year, fob_usd, metric_ton)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (ncm_code, category, country, region, trade_bloc, year, month, fob_usd, metric_ton)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
@@ -54,6 +59,7 @@ def _insert(con: duckdb.DuckDBPyConnection, rows: list[dict[str, Any]]) -> None:
                 r.get("region"),
                 r.get("trade_bloc"),
                 r["year"],
+                r.get("month", 12),
                 r["fob_usd"],
                 r.get("metric_ton", r["fob_usd"] * 0.002),
             )
@@ -68,8 +74,8 @@ def _exp_series(
     """n_years of exact exponential growth ending at final_value in the
     last year -> a perfect log-linear fit (regr_r2 == 1.0 exactly), so
     the expected slope/growth/r2 are known ahead of time without
-    reimplementing OLS in the test. kg defaults (in _insert) to 2x fob
-    for every row, which makes unit_price_usd_per_ton exactly 500
+    reimplementing OLS in the test. metric_ton defaults (in _insert) to
+    0.002x fob for every row, which makes unit_price_usd_per_ton exactly 500
     regardless of totals - handy for asserting the sum-then-divide math
     independently of the growth shape.
     """
@@ -326,3 +332,73 @@ def test_volume_confidence_uses_full_grid_not_just_fixed_product(
     volume_confidence_after = result_after.loc[0, "volume_confidence"]
 
     assert volume_confidence_after < volume_confidence_before
+
+
+def _monthly(
+    first: tuple[int, int], last: tuple[int, int], fob_usd: float, **fields: Any
+) -> list[dict[str, Any]]:
+    """One row per month from first to last (inclusive), each (year, month)."""
+    start = first[0] * 12 + first[1] - 1
+    end = last[0] * 12 + last[1] - 1
+    return [
+        {"year": idx // 12, "month": idx % 12 + 1, "fob_usd": fob_usd, **fields}
+        for idx in range(start, end + 1)
+    ]
+
+
+def test_latest_period_end_is_latest_year_and_month(con: duckdb.DuckDBPyConnection) -> None:
+    _insert(con, _monthly((2023, 1), (2024, 6), 100, ncm_code=PRODUCT_A, country="Wineland"))
+
+    assert latest_period_end(con) == (2024, 6)
+
+
+def test_partial_latest_year_is_not_scored_as_a_full_year(
+    con: duckdb.DuckDBPyConnection,
+) -> None:
+    """Flat monthly buying that ends mid-year. Scored on calendar years,
+    the half-year 2024 would read as a 50% collapse; scored on trailing
+    12-month periods (Jul-Jun), every period is a full, identical year,
+    so growth is exactly zero.
+    """
+    _insert(con, _monthly((2020, 1), (2024, 6), 1000, ncm_code=PRODUCT_A, country="Flatland"))
+
+    result = rank_markets(
+        con,
+        product_level="ncm_code",
+        product_value=PRODUCT_A,
+        geo_level="country",
+        window_years=4,
+    )
+
+    row = result.iloc[0]
+    assert row["years_active"] == 4
+    assert row["annual_growth_pct"] == pytest.approx(0.0)
+    # 4 full 12-month periods (Jul 2020 - Jun 2024), nothing from Jan-Jun 2020
+    assert row["total_fob_usd"] == pytest.approx(48 * 1000)
+
+
+def test_share_pct_uses_latest_twelve_months_not_calendar_year(
+    con: duckdb.DuckDBPyConnection,
+) -> None:
+    """A seasonal buyer that only buys in October has zero share of a
+    Jan-Jun partial year, but a real share of the latest 12 months."""
+    steady = _monthly((2020, 1), (2024, 6), 1000, ncm_code=PRODUCT_A, country="Steadyland")
+    autumn = [
+        {"year": year, "month": 10, "fob_usd": 6000, "ncm_code": PRODUCT_A, "country": "Autumnland"}
+        for year in range(2020, 2024)
+    ]
+    _insert(con, steady + autumn)
+
+    result = rank_markets(
+        con,
+        product_level="ncm_code",
+        product_value=PRODUCT_A,
+        geo_level="country",
+        window_years=4,
+    ).set_index("country")
+
+    # latest period Jul 2023 - Jun 2024: Autumnland 6,000 (Oct 2023) vs.
+    # Steadyland 12 x 1,000
+    assert result.loc["Autumnland", "share_pct"] == pytest.approx(6000 / 18000)
+    assert result.loc["Steadyland", "share_pct"] == pytest.approx(12000 / 18000)
+    assert result.loc["Autumnland", "years_active"] == 4

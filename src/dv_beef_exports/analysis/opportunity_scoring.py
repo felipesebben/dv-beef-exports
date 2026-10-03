@@ -45,6 +45,25 @@ _OUTPUT_COLUMNS = [
     "unit_price_usd_per_ton",
 ]
 
+# marts.exports, with each row tagged by how many trailing 12-month periods
+# ago it falls: 0 = the 12 months ending at the latest month in the data,
+# 1 = the 12 months before that, etc. Periods instead of calendar years so
+# a partial current year is never scored as if it were a full one. Takes
+# one parameter: the latest month index (year * 12 + month - 1).
+_PERIODIZED_SQL = """
+    SELECT *, (? - (year * 12 + month - 1)) // 12 AS periods_ago
+    FROM marts.exports
+"""
+
+
+def latest_period_end(con: duckdb.DuckDBPyConnection) -> tuple[int, int]:
+    """(year, month) of the latest month in marts.exports - where the most
+    recent trailing 12-month period, and so every score, ends.
+    """
+    return con.execute(
+        "SELECT year, month FROM marts.exports ORDER BY year DESC, month DESC LIMIT 1"
+    ).fetchone()
+
 
 def rank_markets(
     con: duckdb.DuckDBPyConnection,
@@ -68,7 +87,9 @@ def rank_markets(
             name. Must be None iff product_level == "overall".
         geo_level: "country" | "region" | "trade_bloc" — the axis being
             ranked. Can't be "overall" (nothing to rank).
-        window_years: trailing window for the trend fit and confidence.
+        window_years: trailing window for the trend fit and confidence, in
+            12-month periods ending at the latest month in the data (so a
+            partial current year is never scored as a full one).
         min_years_active: groups with fewer active years than this are
             dropped entirely (adjusted R² is undefined at 2, unstable
             below ~4 — see the ADR amendment).
@@ -151,8 +172,7 @@ def _score_opportunities(
     if fixed_col is not None and fixed_value is None:
         raise ValueError(f"a fixed_value is required for {fixed_level!r}")
 
-    max_year = con.execute("SELECT max(year) FROM marts.exports").fetchone()[0]
-    min_year = max_year - window_years + 1
+    latest_idx = con.execute("SELECT max(year * 12 + month - 1) FROM marts.exports").fetchone()[0]
 
     fixed_filter_sql = f"AND {fixed_col} = ?" if fixed_col else ""
     fixed_params = [fixed_value] if fixed_col else []
@@ -160,40 +180,42 @@ def _score_opportunities(
     trend_sql = f"""
         WITH windowed AS (
             SELECT
-                {ranked_col} AS group_value,
-                year,
-                sum(fob_usd) AS fob_usd,
-                sum(metric_ton)      AS metric_ton
-            FROM marts.exports
-            WHERE year BETWEEN ? AND ?
+                {ranked_col}    AS group_value,
+                periods_ago,
+                sum(fob_usd)    AS fob_usd,
+                sum(metric_ton) AS metric_ton
+            FROM ({_PERIODIZED_SQL})
+            WHERE periods_ago < ?
                 {fixed_filter_sql}
-            GROUP BY {ranked_col}, year
+            GROUP BY {ranked_col}, periods_ago
             HAVING sum(fob_usd) > 0
         )
         SELECT
             group_value,
-            regr_slope(ln(fob_usd), year) AS log_growth_rate,
-            regr_r2(ln(fob_usd), year)    AS trend_r2,
-            count(*)                      AS years_active,
-            sum(fob_usd)                  AS total_fob_usd,
-            sum(metric_ton)                       AS total_metric_ton
+            -- x = -periods_ago so time runs forward: the slope is log
+            -- growth per 12-month period, oldest to newest
+            regr_slope(ln(fob_usd), -periods_ago)   AS log_growth_rate,
+            regr_r2(ln(fob_usd), -periods_ago)      AS trend_r2,
+            count(*)                                AS years_active,
+            sum(fob_usd)                            AS total_fob_usd,
+            sum(metric_ton)                         AS total_metric_ton
         FROM windowed
         GROUP BY group_value
         HAVING count(*) >= ?
     """
-    trend = con.execute(trend_sql, [min_year, max_year, *fixed_params, min_years_active]).df()
+    trend = con.execute(trend_sql, [latest_idx, window_years, *fixed_params, min_years_active]).df()
 
     if trend.empty:
         return pd.DataFrame(columns=[ranked_col, *_OUTPUT_COLUMNS])
 
     recent_sql = f"""
         SELECT {ranked_col} AS group_value, sum(fob_usd) AS fob_usd
-        FROM marts.exports
-        WHERE year = ?
+        FROM ({_PERIODIZED_SQL})
+        WHERE periods_ago = 0
             {fixed_filter_sql}
         GROUP BY {ranked_col}
     """
-    recent = con.execute(recent_sql, [max_year, *fixed_params]).df()
+    recent = con.execute(recent_sql, [latest_idx, *fixed_params]).df()
     total_recent_fob = recent["fob_usd"].sum()
 
     # K (volume-confidence shrinkage constant) is the median group total
@@ -205,14 +227,14 @@ def _score_opportunities(
     k_sql = f"""
         WITH group_totals AS (
             SELECT {k_cols_sql}, sum(fob_usd) AS total_fob_usd
-            FROM marts.exports
-            WHERE year BETWEEN ? AND ?
+            FROM ({_PERIODIZED_SQL})
+            WHERE periods_ago < ?
             GROUP BY {k_cols_sql}
             HAVING sum(fob_usd) > 0
         )
         SELECT median(total_fob_usd) FROM group_totals
     """
-    k = con.execute(k_sql, [min_year, max_year]).fetchone()[0]
+    k = con.execute(k_sql, [latest_idx, window_years]).fetchone()[0]
 
     result = trend.merge(recent, on="group_value", how="left").rename(
         columns={"fob_usd": "recent_year_fob_usd"}

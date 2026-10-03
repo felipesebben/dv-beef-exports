@@ -192,6 +192,43 @@ Confirmed against real output after the fix: Cambodia (`years_active=4`,
 0.74 — both now correctly surface near the top of the ranking, ahead of
 the `years_active=2` artifacts, which are excluded entirely.
 
+## Amendment (2026-10-03): trailing 12-month periods, not calendar years
+"Year" everywhere above — the trend fit's x-axis, `years_active`, the
+window, and `share_pct`'s "most recent year" — now means a **trailing
+12-month period ending at the latest month in the data**, not a calendar
+year.
+
+Why: `max(year)` is almost always a partial year (ComexStat publishes
+monthly — when this was found, 2026 held January–August only). Scored as a
+full year, it reads as a one-third collapse for every market, which drags
+down both growth and trend fit (frozen livers: Guyana's adjusted R² went
+from 0.17 to 0.69 once fixed, Hong Kong's from 0.25 to 0.69), and it
+computes `share_pct` on eight months, so a buyer that only purchases in
+October has zero share.
+
+Options considered:
+- **Drop the partial year** (window ends at the last complete calendar
+  year): simplest, but discards the newest months and, for frozen livers,
+  dropped 9 countries outright — mostly the newest markets, the ones a
+  small trading company most wants to see.
+- **Annualise it** (scale Jan–Aug by 12/8): invents four months of data
+  and gets seasonal buyers wrong.
+- **Trailing 12-month periods** (chosen): every period is a full 12
+  months, the newest data still counts, nothing is invented.
+
+Implementation: `periods_ago = (latest_month_index - month_index) // 12`,
+where `month_index = year * 12 + month - 1`; the window is
+`periods_ago < window_years`, the share period is `periods_ago = 0`, and
+the regression's x is `-periods_ago`. Output column names (`years_active`,
+`annual_growth_pct`, `window_years`) are unchanged — each period is still
+one year long.
+
+Trade-off accepted: period boundaries move every month as data lands, so
+sparse markets (one or two shipments a year) can shift between periods
+from one pull to the next. This exposed one known distortion — a tiny
+first period inflating log-linear growth (Bahrain, frozen livers) — which
+is documented in `docs/analysis-methodology.md` and not yet addressed.
+
 ## Status
 Accepted, 2026-09-12. Amended 2026-09-12 (adjusted R² + `years_active >= 4`
-floor, above).
+floor, above). Amended 2026-10-03 (trailing 12-month periods, above).

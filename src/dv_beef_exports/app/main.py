@@ -10,6 +10,8 @@ Run with: uv run streamlit run src/dv_beef_exports/app/main.py
 
 from __future__ import annotations
 
+from datetime import date
+
 import altair as alt
 import duckdb
 import pandas as pd
@@ -18,6 +20,7 @@ import streamlit as st
 from dv_beef_exports.analysis.opportunity_scoring import (
     GEO_LEVELS,
     PRODUCT_LEVELS,
+    latest_period_end,
     rank_markets,
     rank_products,
 )
@@ -220,6 +223,11 @@ def main() -> None:
         "confidence = geometric mean of years-coverage, trend fit, and volume "
         "(docs/decisions/0005-opportunity-scoring-methodology.md)."
     )
+    end_year, end_month = latest_period_end(con)
+    st.caption(
+        f"Each year is a trailing 12-month period ending {date(end_year, end_month, 1):%b %Y}, "
+        "so a partial calendar year is never scored as a full one."
+    )
 
     params = _sidebar_controls(con)
     result = _run_query(con, params)
@@ -257,7 +265,7 @@ def main() -> None:
             "Volume confidence": st.column_config.NumberColumn(format="%.2f"),
             "Opportunity score": st.column_config.NumberColumn(format="%.3f"),
             "Total FOB (USD)": st.column_config.NumberColumn(format="$%,.0f"),
-            "Total KG": st.column_config.NumberColumn(format="%,.0f"),
+            "Total tons": st.column_config.NumberColumn(format="%,.0f"),
             "USD / ton": st.column_config.NumberColumn(format="$%,.0f"),
         },
     )
