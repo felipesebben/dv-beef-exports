@@ -33,9 +33,8 @@ against each other rather than taken on faith:
 > `product_level="ncm_code"`, `geo_level="country"`.
 > Data through **August 2026**.
 
-`rank_markets()` returns 53 countries, and **Singapore ranks #2** with an
-`opportunity_score` of `1.513` (#1, Bahrain, is a distortion worth its own
-note — see [Known distortions](#known-distortions-in-the-current-data)).
+`rank_markets()` returns 53 countries, and **Singapore ranks #1** with an
+`opportunity_score` of `1.513`.
 Every metric below is derived from Singapore's Brazilian-export history,
 grouped into trailing 12-month periods ending at the latest month in the
 data (see [Step 1](#step-1--the-trailing-window)):
@@ -128,29 +127,51 @@ missing months and get seasonal buyers wrong).
 that collapsed just before it looks untouched by it. Period boundaries
 also move every month as new data lands, so a ranking pulled in September
 and one pulled in October are cut differently; small markets with one or
-two shipments a year can shift between periods (see Bahrain under [Known
-distortions](#known-distortions-in-the-current-data)).
+two shipments a year can shift between periods, and a shipment landing on
+one side of a boundary or the other can change a group's first period —
+which matters for the [leading trim](#step-2--years_active-the-leading-trim-and-the--4-floor).
 
 ---
 
-## Step 2 — `years_active`, and the >= 4 floor
+## Step 2 — `years_active`, the leading trim, and the >= 4 floor
 
 **Question.** In how many of the window's periods did this group actually
-buy anything?
+buy anything — in amounts that are more than noise?
 
-**Formula.** Periods are aggregated first, then only positive ones are
-kept:
+**Formula.** Periods are aggregated first, and only positive ones are
+kept. Then **leading tiny periods are trimmed**: walking from the oldest
+period forward, every period before the first one worth at least 1% of
+the group's median active period is dropped.
 
 ```
-years_active = count of periods with periods_ago < window_years where sum(fob_usd) > 0
+active periods = periods with periods_ago < window_years and sum(fob_usd) > 0
+trimmed        = leading active periods with fob_usd < 0.01 * median(active fob_usd)
+years_active   = count of active periods, minus trimmed ones
 ```
+
+Trimmed periods are treated as noise, not activity: they are excluded from
+`years_active`, the trend fit, and the window totals. The trim is
+**leading-only** — a tiny period in the middle or at the end of the series
+is kept, so a market that collapses to almost nothing still reads as
+shrinking.
+
+Why it exists: in log space a near-zero first value has enormous leverage
+on the slope — going from $42 to $13,080 is a bigger log step than going
+from $1M to $100M. Bahrain's frozen-liver history starts with a $42 period
+(two shipments of $22 and $20), then runs $13,080 → $33,241 → $13,960 →
+$102,339. Untrimmed, that $42 made Bahrain the #1 opportunity at
++379%/yr; trimmed (0.3% of its $13,960 median), it is +70%/yr and #8.
+Across the whole `ncm_code x country` grid the trim touches 16 of 727
+groups.
 
 Groups with `years_active < min_years_active` are **dropped entirely** —
 no score, no confidence, not ranked. The floor cannot be set below 3, and
 4 is the recommended default.
 
 **Worked example.** Singapore: `years_active = 8` (every period from
-Sep 2018 – Aug 2019 on; nothing in the two before). Across all frozen-liver
+Sep 2018 – Aug 2019 on; nothing in the two before). Its first period,
+$524, is 3.7% of its $14,341 median — small but real, so nothing is
+trimmed. Across all frozen-liver
 buyers in the window, **61 of 114 countries are dropped** by the floor and
 53 survive.
 
@@ -206,9 +227,11 @@ low.
    last two still reports positive growth with a mediocre fit. Only the
    period-by-period history shows that shape — the app does not chart it
    yet, so check `marts.exports` directly before acting on a lead.
-2. In log space, a **tiny first value** has enormous leverage: going from
-   $42 to $13,000 is a bigger log step than going from $1M to $100M. One
-   near-zero period at the start of a series can dominate the slope.
+2. In log space, a **single extreme point** has outsized leverage on the
+   slope. The worst case — a near-zero *first* period — is removed by the
+   [leading trim](#step-2--years_active-the-leading-trim-and-the--4-floor);
+   extreme points elsewhere in the series are not, and show up as a lower
+   `trend_r2` instead.
 
 ---
 
@@ -372,7 +395,7 @@ are individually strong. Read it as a band rather than a precise value:
 | below 0.40 | thin evidence — treat the score as a hypothesis only |
 
 Always look at which leg is *binding*. A confidence of 0.52 from
-`coverage 0.4 x fit 0.69 x volume 0.52` (Guyana, #3 in this ranking) is a
+`coverage 0.4 x fit 0.69 x volume 0.52` (Guyana, #2 in this ranking) is a
 short-history problem first — four active periods of ten — and the
 remedy, waiting for more years, is different from the remedy for a weak
 fit or a tiny market.
@@ -509,12 +532,12 @@ above is why.
 
 ## Reading a result: the pair that matters
 
-The most useful comparison in this ranking is not #1 vs. #2 — it is a
+The most useful comparison in this ranking is not #1 vs. #2 — it is the
 top-ranked newcomer vs. the incumbent:
 
 | | Singapore | Egypt |
 | --- | --- | --- |
-| Rank by score | **#2** | #24 |
+| Rank by score | **#1** | #23 |
 | `opportunity_score` | 1.513 | 0.317 |
 | `confidence` | 0.857 | 0.876 |
 | `annual_growth_pct` | +151.6% | +81.9% |
@@ -545,33 +568,25 @@ The score is a lead generator for manual research, never the decision.
 
 Real issues in the output as it stands today, not hypotheticals.
 
-### A tiny first period can inflate growth (Bahrain)
+### Trimming can reveal a market reopening (Mexico)
 
-Bahrain (spelled `Bahrein` in ComexStat) ranks **#1** for frozen livers at
-`opportunity_score = 3.78` — +379%/yr. Its five active periods:
+The [leading trim](#step-2--years_active-the-leading-trim-and-the--4-floor)
+compares each period against the group's *median*, so when a market's
+recent volume dwarfs its old volume, old-but-real periods can fall under
+1% and be trimmed. Boneless beef (`02023000`) to Mexico: two periods of
+~$40–50k early in the window, a four-year gap, then a steep ramp. Those
+early periods are under 1% of today's median, so they are trimmed and the
+fit sees only the recent ramp — +513%/yr instead of +205%/yr.
 
-| Period | FOB (USD) |
-| --- | --- |
-| Sep 2021 – Aug 2022 | 42 |
-| Sep 2022 – Aug 2023 | 13,080 |
-| Sep 2023 – Aug 2024 | 33,241 |
-| Sep 2024 – Aug 2025 | 13,960 |
-| Sep 2025 – Aug 2026 | 102,339 |
-
-The first period is two shipments worth $22 and $20. In log space the jump
-from $42 to $13,080 is larger than any other step in the series, so it
-drives most of the slope (see [Step 3](#step-3--the-log-linear-trend-fit)).
-Under calendar years the same two shipments were merged with a $13,080
-December shipment and the distortion was hidden; the period cut exposes
-it. The guardrails partly catch it — `confidence` is 0.60 (middle band:
-coverage 0.5, fit 0.56) — but the score itself is not trustworthy.
-Possible fixes, none decided: a minimum value for a period to count as
-active, or a robust slope estimator less sensitive to one extreme point.
+That is arguably the right reading (a gap followed by a ramp is a market
+opening, and the old trade was a different regime), but it is a judgement
+the formula makes silently. Any group with a multi-year gap inside the
+window deserves a look at its raw history before its growth is trusted.
 
 ### Brazil appears as a destination country
 
 `Brazil` shows up as a frozen-liver *buyer* ($2,147 over 4 periods, ranked
-#4 by score) — re-imports or returned shipments inside ComexStat's export
+#3 by score) — re-imports or returned shipments inside ComexStat's export
 data. Small in value, but it is not a market, and it should probably be
 excluded at the marts layer.
 
@@ -590,7 +605,7 @@ methodology, not a bug fix.
 
 | Column | One-line meaning | Scale |
 | --- | --- | --- |
-| `years_active` | 12-month periods in the window with any exports | count |
+| `years_active` | 12-month periods in the window with exports, after the leading trim | count |
 | `annual_growth_pct` | compound yearly growth from the fitted trend | % (unbounded) |
 | `trend_r2_adj` | how well one steady trend explains the history | 0–1 |
 | `coverage_score` | how complete the history is within the window | 0–1 |
