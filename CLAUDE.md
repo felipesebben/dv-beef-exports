@@ -18,6 +18,7 @@ uv run ruff check .             # lint
 uv run ruff format .            # format
 uv run pre-commit install       # one-time: run ruff on every commit
 uv run streamlit run src/dv_beef_exports/app/main.py  # run the Streamlit prototype (Phase 3)
+# deployed on Streamlit Community Cloud from main - see docs/DEPLOY.md
 ```
 
 CI (`.github/workflows/ci.yml`) runs `ruff check` + `pytest` on every PR into `main`; both must pass before merge.
