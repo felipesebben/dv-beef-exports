@@ -51,6 +51,12 @@ TRADE_BLOC_NAMES = (
 
 _TRADE_BLOC_NAMES_SQL = ", ".join(f"'{name}'" for name in TRADE_BLOC_NAMES)
 
+# ComexStat's export data lists Brazil itself as a destination for a small
+# number of rows (~$204k of ~$150B across 1997-2026, all 2018 onward) -
+# not an export market, so marts drops it; staging keeps it, faithful to
+# the source. Matched on the stable country code, not the name.
+BRAZIL_CO_PAIS = "105"
+
 _CREATE_RAW_EXPORTS_SQL = """
     CREATE TABLE IF NOT EXISTS raw.exports (
         pull_id                 UUID NOT NULL,
@@ -201,6 +207,9 @@ _BUILD_MARTS_SQL = f"""
         e.kg / 1000.0 AS metric_ton
     FROM staging.exports e
     LEFT JOIN country_blocs cb ON cb.co_pais = e.co_pais
+    -- IS DISTINCT FROM, not <>: rows whose country didn't match dim_country
+    -- (co_pais NULL) must stay, not silently vanish
+    WHERE e.co_pais IS DISTINCT FROM '{BRAZIL_CO_PAIS}'
 """
 
 
