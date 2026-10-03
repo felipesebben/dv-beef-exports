@@ -166,3 +166,17 @@ something worth remembering (see `docs/WORKFLOW.md`).
   `persist_state="session"` keeps the sidebar query intact across the
   visit (Streamlit otherwise resets widgets that aren't rendered).
 
+
+## 2026-10-03 — Phase 4 researched, moved to backlog
+- A free-sources-only survey of where importing companies can be named,
+  for the ten top-scoring markets:
+  `docs/research/beef-importer-free-data-sources.md` (cited, each claim
+  marked verified / snippet / inferred).
+- Finding: only Canada names importers for free; market share is fully
+  automatable via UN Comtrade. Phase 4 is parked on the backlog with an
+  ordered task list in `docs/ROADMAP.md`.
+- Two findings outlive Phase 4 and are recorded there: the repo is public,
+  so Comtrade's internal-use licence keeps raw rows out of git; and
+  ComexStat records declared destinations, which makes Turkey's
+  opportunity score suspect (Brazil reports 24x more frozen boneless beef
+  to Turkey than Turkey reports receiving).

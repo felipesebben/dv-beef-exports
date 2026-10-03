@@ -41,6 +41,11 @@ data/processed/*
 data/samples/*/*
 !data/samples/*/.gitkeep
 
+# Deep-research working notes and draft reports. Finished reports are
+# moved into docs/research/ and committed; the raw notes stay local.
+research_notes/
+reports/
+
 # Environment / secrets
 .env
 .env.*
