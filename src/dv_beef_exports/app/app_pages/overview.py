@@ -7,18 +7,22 @@ query (a ranking query) doesn't apply here.
 
 from __future__ import annotations
 
+from html import escape
+
 import altair as alt
 import pandas as pd
 import streamlit as st
 
 from dv_beef_exports.analysis.market_overview import market_trend, top_destinations_matrix
 from dv_beef_exports.app.common import (
-    CATEGORY_PHRASES,
     CHART_INK,
-    PRODUCT_PHRASES,
+    MONEY_AXIS_LABELS,
+    TONS_AXIS_LABELS,
     connection,
+    display_name,
     geo_label,
     market_scope_options,
+    period_label,
     product_phrase,
     product_scope_options,
     style_chart,
@@ -60,6 +64,18 @@ _MATRIX_MEASURES = {
     ),
 }
 _HIGHEST, _LOWEST, _OTHER = "Highest", "Lowest", "Other periods"
+# the measure as a plain noun, for sentences ("showing volume")
+_MEASURE_NOUNS = {
+    "Value (USD)": "value",
+    "Volume (tons)": "volume",
+    "Average price ($/t)": "average price",
+    "Destinations": "destinations",
+}
+_AXIS_LABELS = {
+    "fob_usd": MONEY_AXIS_LABELS,
+    "metric_ton": TONS_AXIS_LABELS,
+    "unit_price_usd_per_ton": "format(datum.value, '$,.0f')",
+}
 _ROWS = {"Countries": ("country", "country"), "Regions": ("region", "region")}
 _ROWS["Trade blocs"] = ("trade_bloc", "trade bloc")
 _COLUMNS = {"Products": "ncm_code", "Categories": "category"}
@@ -72,7 +88,7 @@ def _md(text: str) -> str:
 
 def _period_label(df: pd.DataFrame) -> list[str]:
     return [
-        f"{start:%b %Y}–{end:%b %Y}"
+        period_label(start, end)
         for start, end in zip(df["period_start"], df["period_end"], strict=True)
     ]
 
@@ -145,11 +161,16 @@ def _trend_chart(trend: pd.DataFrame, measure: str) -> alt.LayerChart:
         x=alt.X(
             "period:N",
             sort=None,
-            title="12-month period (one bar = the total for all 12 months)",
-            axis=alt.Axis(labelAngle=-35),
+            title="Each bar = the total for one 12-month period",
+            axis=alt.Axis(labelAngle=-40),
         ),
         # headroom above the tallest bar for its label
-        y=alt.Y(f"{column}:Q", title=title, scale=alt.Scale(domain=[0, top * 1.15])),
+        y=alt.Y(
+            f"{column}:Q",
+            title=title,
+            scale=alt.Scale(domain=[0, top * 1.15]),
+            axis=alt.Axis(labelExpr=_AXIS_LABELS[column]) if column in _AXIS_LABELS else alt.Axis(),
+        ),
         tooltip=tooltip,
     )
     bars = base.mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
@@ -167,11 +188,6 @@ def _trend_chart(trend: pd.DataFrame, measure: str) -> alt.LayerChart:
         .transform_filter(alt.datum.label != "")
     )
     return (bars + labels).properties(height=420)
-
-
-def _product_name(level: str, value: str) -> str:
-    phrase = PRODUCT_PHRASES[value] if level == "ncm_code" else CATEGORY_PHRASES[value]
-    return phrase[:1].upper() + phrase[1:]
 
 
 def _short_tons(t: float) -> str:
@@ -192,72 +208,97 @@ def _cell_label(measure_column: str, value: float) -> str:
     return money(value)
 
 
-def _matrix_chart(
-    matrix: pd.DataFrame, columns_level: str, rows_label: str, measure: str
-) -> alt.LayerChart:
+# The who-buys-what matrix is an HTML table, not a chart: it scrolls sideways
+# on a phone with the destination column pinned, where an 11-column chart
+# just squeezes every cell. Each product column is shaded on its own scale.
+_SHADE_LOW = (232, 241, 252)  # near-white blue
+_SHADE_HIGH = (28, 92, 171)  # #1c5cab
+_MATRIX_CSS = """
+<style>
+.bm-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch;
+  border: 1px solid #ecebe7; border-radius: 8px; }
+.bm { border-collapse: separate; border-spacing: 0; width: 100%;
+  font-size: 13px; font-variant-numeric: tabular-nums; }
+.bm th, .bm td { padding: 7px 10px; white-space: nowrap; text-align: right;
+  border-bottom: 1px solid #ffffff; }
+.bm thead th { color: #52514e; font-weight: 600; font-size: 12px; white-space: normal;
+  min-width: 84px; max-width: 120px; vertical-align: bottom;
+  border-bottom: 1px solid #d5d4ce; background: #ffffff; }
+.bm th[scope="row"], .bm th.bm-corner { position: sticky; left: 0; z-index: 1;
+  background: #ffffff; text-align: left; color: #0b0b0b; font-weight: 600;
+  border-right: 1px solid #d5d4ce; }
+.bm td.bm-empty { color: #c3c2b7; }
+.bm td.bm-top { font-weight: 700; }
+.bm-legend { font-size: 12px; color: #898781; margin: 8px 2px 0; }
+.bm-swatch { display: inline-block; width: 72px; height: 8px; border-radius: 4px;
+  vertical-align: middle; margin: 0 6px;
+  background: linear-gradient(90deg, rgb(232,241,252), rgb(28,92,171)); }
+</style>
+"""
+
+
+def _shade(relative: float) -> str:
+    rgb = (round(lo + (hi - lo) * relative) for lo, hi in zip(_SHADE_LOW, _SHADE_HIGH, strict=True))
+    return "rgb({},{},{})".format(*rgb)
+
+
+def _cell_tooltip(row: pd.Series, destination_noun: str, yoy_column: str, measure: str) -> str:
+    def pct(value: float, fmt: str) -> str:
+        return "n/a" if pd.isna(value) else format(value, fmt)
+
+    lines = [
+        f"{row['destination']} · {row['product_name']}",
+        f"Value: {money(row['fob_usd'])}" if row["fob_usd"] > 0 else "Value: none",
+        f"Tons: {_short_tons(row['metric_ton'])}" if row["metric_ton"] > 0 else "Tons: none",
+        "Avg. price: n/a"
+        if pd.isna(row["unit_price_usd_per_ton"])
+        else f"Avg. price: ${row['unit_price_usd_per_ton']:,.0f}/t",
+        f"{measure} vs previous 12 months: {pct(row[yoy_column], '+.0%')}",
+        f"Share of this {destination_noun}'s purchases: {pct(row['share_of_destination'], '.1%')}",
+    ]
+    return "&#10;".join(escape(line) for line in lines)
+
+
+def _matrix_html(
+    matrix: pd.DataFrame, columns_level: str, destination_noun: str, measure: str
+) -> str:
     column, yoy_column, _, _, _ = _MATRIX_MEASURES[measure]
-    cell_value = matrix[column].where(matrix[column] > 0)
-    # colour each product column on its own scale: 100% = the column's top
-    # destination. One scale for the whole grid would just say "frozen cuts
-    # are big" - products differ in size by orders of magnitude.
-    relative = cell_value / cell_value.groupby(matrix["product"]).transform("max")
+    value = matrix[column].where(matrix[column] > 0)
+    # 1.0 = the column's top destination; products differ in size by orders of
+    # magnitude, so one scale for the whole grid would only say "frozen is big"
+    relative = value / value.groupby(matrix["product"]).transform("max")
     data = matrix.assign(
-        product_name=[_product_name(columns_level, v) for v in matrix["product"]],
-        cell_label=[_cell_label(column, v) for v in cell_value],
+        product_name=[display_name(columns_level, v) for v in matrix["product"]],
+        value=value,
         relative=relative,
-        is_top=relative == 1,
     )
-    destination_order = list(dict.fromkeys(data["destination"]))
-    product_order = list(dict.fromkeys(data["product_name"]))
-    base = alt.Chart(data).encode(
-        x=alt.X(
-            "product_name:N",
-            sort=product_order,
-            title=None,
-            axis=alt.Axis(orient="top", labelAngle=-30, labelLimit=180, domain=False),
-        ),
-        y=alt.Y(
-            "destination:N",
-            sort=destination_order,
-            title=None,
-            axis=alt.Axis(domain=False, labelColor="#0b0b0b"),
-        ),
-        tooltip=[
-            alt.Tooltip("destination:N", title=rows_label.capitalize()),
-            alt.Tooltip("product_name:N", title="Product"),
-            alt.Tooltip("fob_usd:Q", title="Value, last 12 months", format="$,.0f"),
-            alt.Tooltip("metric_ton:Q", title="Tons, last 12 months", format=",.0f"),
-            alt.Tooltip("unit_price_usd_per_ton:Q", title="Average price ($/t)", format="$,.0f"),
-            alt.Tooltip(f"{yoy_column}:Q", title=f"{measure} vs previous 12 months", format="+.0%"),
-            alt.Tooltip("relative:Q", title="vs this product's top destination", format=".0%"),
-            alt.Tooltip(
-                "share_of_destination:Q",
-                title=f"Share of this {rows_label}'s purchases (value)",
-                format=".1%",
-            ),
-        ],
+    products = list(dict.fromkeys(data["product_name"]))
+    header = "".join(f'<th scope="col">{escape(name)}</th>' for name in products)
+    body = []
+    for destination, rows in data.groupby("destination", sort=False):
+        cells = []
+        for _, row in rows.iterrows():
+            tooltip = _cell_tooltip(row, destination_noun, yoy_column, measure)
+            if pd.isna(row["relative"]):
+                cells.append(f'<td class="bm-empty" title="{tooltip}">—</td>')
+                continue
+            ink = "#ffffff" if row["relative"] > 0.55 else CHART_INK
+            top = ' class="bm-top"' if row["relative"] == 1 else ""
+            cells.append(
+                f'<td{top} title="{tooltip}" style="background:{_shade(row["relative"])};'
+                f'color:{ink}">{escape(_cell_label(column, row["value"]))}</td>'
+            )
+        body.append(f'<tr><th scope="row">{escape(str(destination))}</th>{"".join(cells)}</tr>')
+    legend = (
+        '<p class="bm-legend">Each product column is shaded on its own:'
+        '<span class="bm-swatch"></span>darker = closer to that product\'s top buyer '
+        "(in <b>bold</b>). Hover or long-press a cell for details.</p>"
     )
-    cells = base.mark_rect(stroke="white", strokeWidth=1).encode(
-        color=alt.Color(
-            "relative:Q",
-            scale=alt.Scale(domain=[0, 1], scheme="blues"),
-            legend=alt.Legend(title="vs the product's top destination", format=".0%"),
-        ),
+    return (
+        f'{_MATRIX_CSS}<div class="bm-wrap"><table class="bm"><thead><tr>'
+        f'<th scope="col" class="bm-corner">{escape(destination_noun.capitalize())}</th>'
+        f"{header}</tr></thead><tbody>{''.join(body)}</tbody></table></div>{legend}"
     )
-    # font weight is a mark property in Vega-Lite, not an encoding channel,
-    # so the bold top-of-column labels are their own filtered layer
-    text_color = alt.condition(alt.datum.relative > 0.55, alt.value("white"), alt.value(CHART_INK))
-    labels = (
-        base.mark_text(fontSize=11)
-        .encode(text="cell_label:N", color=text_color)
-        .transform_filter(~alt.datum.is_top)
-    )
-    top_labels = (
-        base.mark_text(fontSize=11, fontWeight="bold")
-        .encode(text="cell_label:N", color=text_color)
-        .transform_filter(alt.datum.is_top)
-    )
-    return (cells + labels + top_labels).properties(height=alt.Step(30))
 
 
 st.title("Market overview")
@@ -317,11 +358,7 @@ matrix_measure = measure if measure in _MATRIX_MEASURES else "Value (USD)"
 ranked_by = "volume" if matrix_measure == "Volume (tons)" else "value"
 st.caption(
     f"The biggest destinations by {ranked_by} in the latest 12 months, showing "
-    f"**{matrix_measure.lower()}** - follows the measure picked above. "
-    "**Each column is coloured on its own**: the darkest cell (in bold) is that product's "
-    "top destination, and the others are shaded by how they compare with it - so you can "
-    "spot the leading buyer of each product even though products differ hugely in size. "
-    "Hover a cell for value, tons, price and the change vs the previous 12 months."
+    f"**{_MEASURE_NOUNS[matrix_measure]}** (follows the measure picked above)."
 )
 if measure == "Destinations":
     st.caption(
@@ -371,7 +408,4 @@ else:
     note = concentration_note(matrix, rows_noun, share_column=share_column, basis=basis)
     if note:
         st.warning(_md(note), icon=":material/pie_chart:")
-    st.altair_chart(
-        style_chart(_matrix_chart(matrix, columns_level, rows_noun, matrix_measure)),
-        width="stretch",
-    )
+    st.html(_matrix_html(matrix, columns_level, rows_noun, matrix_measure))
