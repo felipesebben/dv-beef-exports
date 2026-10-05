@@ -28,21 +28,27 @@ _TABLE_ORDER = [
     "opportunity_score",
     "confidence",
     "annual_growth_pct",
+    "recent_growth_pct",
     "share_pct",
+    "tons_per_year",
     "total_fob_usd",
-    "total_metric_ton",
     "unit_price_usd_per_ton",
+    "price_trend_pct",
+    "attractiveness",
+    "materiality",
+    "recent_consistency",
     "years_active",
     "trend_r2_adj",
     "coverage_score",
     "volume_confidence",
+    "total_metric_ton",
 ]
 
 
 def _opportunity_chart(result: pd.DataFrame, ranked_label: str) -> alt.LayerChart:
     top = result.nlargest(15, "opportunity_score")
     base = alt.Chart(top).encode(
-        x=alt.X("opportunity_score:Q", title="Opportunity score"),
+        x=alt.X("opportunity_score:Q", title="Opportunity index", scale=alt.Scale(domain=[0, 100])),
         y=alt.Y(
             "name:N",
             sort="-x",
@@ -52,7 +58,7 @@ def _opportunity_chart(result: pd.DataFrame, ranked_label: str) -> alt.LayerChar
         ),
         tooltip=[
             alt.Tooltip("name:N", title=ranked_label),
-            alt.Tooltip("opportunity_score:Q", title="Opportunity score", format=".2f"),
+            alt.Tooltip("opportunity_score:Q", title="Opportunity index", format=".0f"),
             alt.Tooltip("confidence:Q", title="Confidence", format=".0%"),
             alt.Tooltip("annual_growth_pct:Q", title="Growth / yr", format="+.0%"),
             alt.Tooltip("share_pct:Q", title="Share", format=".1%"),
@@ -61,12 +67,12 @@ def _opportunity_chart(result: pd.DataFrame, ranked_label: str) -> alt.LayerChar
     )
     bars = base.mark_bar(color="#2a78d6", cornerRadiusEnd=4)
     labels = base.mark_text(align="left", dx=4, color=CHART_INK).encode(
-        text=alt.Text("opportunity_score:Q", format=".2f")
+        text=alt.Text("opportunity_score:Q", format=".0f")
     )
     return (bars + labels).properties(
         title=alt.TitleParams(
-            text="Top 15 by opportunity score",
-            subtitle="Fast growth with plenty of room left ranks highest",
+            text="Top 15 by opportunity index",
+            subtitle="Growing, material markets with room left and rising prices rank highest",
             anchor="start",
         ),
         height=alt.Step(24),
@@ -81,7 +87,14 @@ def _column_config(ranked_label: str) -> dict:
         config[col] = st.column_config.NumberColumn(
             label, format=COLUMN_FORMATS[col], help=METRIC_GLOSSARY[col]
         )
-    # confidence reads faster as a bar than as a number
+    # the index and confidence read faster as bars than as numbers
+    config["opportunity_score"] = st.column_config.ProgressColumn(
+        COLUMN_LABELS["opportunity_score"],
+        format="%.0f",
+        min_value=0,
+        max_value=100,
+        help=METRIC_GLOSSARY["opportunity_score"],
+    )
     config["confidence"] = st.column_config.ProgressColumn(
         COLUMN_LABELS["confidence"],
         format="%.0f%%",
@@ -95,16 +108,18 @@ def _column_config(ranked_label: str) -> dict:
 def _reading_guide() -> None:
     with st.expander("How to read these numbers", icon=":material/help:"):
         st.markdown(
-            "The score is a **starting point for research, not a decision**. Read it in "
-            "this order:\n\n"
-            "1. **Score** - fast growth with lots of room left ranks highest. It's a "
-            "ranking, not a size: a tiny market can score high.\n"
-            "2. **Confidence** - how much evidence backs the score:\n"
+            "The **opportunity index** (0-100) is a **starting point for research, not a "
+            "decision**. It multiplies four factors, so one weak factor pulls it down:\n\n"
+            "1. **Attractiveness** - long-run growth, recent momentum, size and a rising "
+            "price, each ranked against the rest.\n"
+            "2. **Room to grow** - the part of the market not already Brazil's, so a "
+            "saturated market's size counts for little.\n"
+            "3. **Commercial size** - tons a year against one 25-ton container: a market "
+            "buying less than a container a year is heavily discounted.\n"
+            "4. **Evidence** - confidence in the trend:\n"
             "    - **70% and above**: history, steadiness and size all hold up.\n"
             "    - **40-70%**: one piece is weak - check which.\n"
-            "    - **below 40%**: treat it as a hypothesis.\n"
-            "3. **Value and tons** - whether the trade is big enough to be worth a sales "
-            "conversation.\n\n"
+            "    - **below 40%**: treat it as a hypothesis.\n\n"
             "Hover any column header for what it means."
         )
         st.page_link(
@@ -117,7 +132,8 @@ def _reading_guide() -> None:
 st.title("Opportunities")
 end_year, end_month = latest_period_end(connection())
 st.caption(
-    "Where Brazil's beef exports are growing fast with plenty of room left to grow. "
+    "Where Brazil's beef exports are growing steadily, in material volumes, with room left "
+    "to grow. "
     f"Each year is a 12-month period ending {date(end_year, end_month, 1):%b %Y}."
 )
 query = st.session_state.query

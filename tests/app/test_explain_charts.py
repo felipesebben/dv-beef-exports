@@ -57,7 +57,10 @@ def _all_charts() -> dict:
         "trend": charts.trend_context(HISTORY, log_scale=False),
         "trend_log": charts.trend_context(HISTORY, log_scale=True),
         "share": charts.share_context(HISTORY, scope, ("Share of exports", "Going to X")),
-        "score": charts.score_context(PEERS, "Target", "countries"),
+        "recent": charts.recent_context(HISTORY),
+        "index": charts.index_breakdown(
+            {"attractiveness": 0.7, "room to grow": 0.99, "commercial size": 0.5, "evidence": 0.9}
+        ),
         "coverage": charts.coverage_context(HISTORY),
         "volume": charts.volume_context("Target", 10_300_000, 7_000_000),
         "confidence": charts.confidence_context(ROW),
@@ -81,8 +84,10 @@ def test_size_context_is_two_stacked_charts_not_a_dual_axis() -> None:
     spec = charts.size_context(HISTORY).to_dict()
 
     assert len(spec["vconcat"]) == 2
-    y_fields = [sub["encoding"]["y"]["field"] for sub in spec["vconcat"]]
-    assert y_fields == ["fob_usd", "metric_ton"]
+    value_chart, tons_chart = spec["vconcat"]
+    assert value_chart["encoding"]["y"]["field"] == "fob_usd"
+    # the tons chart is layered with its one-container reference line
+    assert tons_chart["layer"][0]["encoding"]["y"]["field"] == "metric_ton"
 
 
 def test_comparison_appends_the_subject_with_its_rank_when_outside_the_top() -> None:

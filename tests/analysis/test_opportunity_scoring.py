@@ -257,26 +257,167 @@ def test_perfect_exponential_trend_gives_full_r2_and_expected_growth(
     assert row["annual_growth_pct"] == pytest.approx(math.exp(rate) - 1)
 
 
-def test_share_pct_and_opportunity_score_ranking(con: duckdb.DuckDBPyConnection) -> None:
-    rate = 0.2
-    # same growth rate for both -> opportunity_score ordering is driven
-    # purely by share_pct (the lower-share country should score higher).
-    rows_p = _exp_series(2020, 5, final_value=300, rate=rate, ncm_code=PRODUCT_A, country="P")
-    rows_q = _exp_series(2020, 5, final_value=700, rate=rate, ncm_code=PRODUCT_A, country="Q")
+def test_share_pct_is_each_groups_slice_of_the_latest_period(
+    con: duckdb.DuckDBPyConnection,
+) -> None:
+    rows_p = _exp_series(2020, 5, final_value=300, rate=0.2, ncm_code=PRODUCT_A, country="P")
+    rows_q = _exp_series(2020, 5, final_value=700, rate=0.2, ncm_code=PRODUCT_A, country="Q")
     _insert(con, rows_p + rows_q)
+
+    by_country = rank_markets(
+        con, product_level="ncm_code", product_value=PRODUCT_A, geo_level="country"
+    ).set_index("country")
+
+    assert by_country.loc["P", "share_pct"] == pytest.approx(0.3)
+    assert by_country.loc["Q", "share_pct"] == pytest.approx(0.7)
+
+
+def _market(country: str, values: list[float], tons_per_dollar: float = 0.01, **extra) -> list:
+    return [
+        {
+            "year": 2017 + i,
+            "fob_usd": v,
+            "metric_ton": v * tons_per_dollar,
+            "ncm_code": PRODUCT_A,
+            "country": country,
+            **extra,
+        }
+        for i, v in enumerate(values)
+        if v > 0
+    ]
+
+
+STEADY = [1_000, 1_200, 1_440, 1_728, 2_074, 2_488, 2_986, 3_583, 4_300, 5_160]
+
+
+def test_index_is_the_product_of_its_four_factors(con: duckdb.DuckDBPyConnection) -> None:
+    _insert(con, _market("A", STEADY) + _market("B", [v * 2 for v in STEADY[::-1]]))
 
     result = rank_markets(
         con, product_level="ncm_code", product_value=PRODUCT_A, geo_level="country"
     )
 
-    by_country = result.set_index("country")
-    assert by_country.loc["P", "share_pct"] == pytest.approx(0.3)
-    assert by_country.loc["Q", "share_pct"] == pytest.approx(0.7)
-    growth = math.exp(rate) - 1
-    assert by_country.loc["P", "opportunity_score"] == pytest.approx(growth * 0.7)
-    assert by_country.loc["Q", "opportunity_score"] == pytest.approx(growth * 0.3)
-    # sorted descending by opportunity_score -> P (lower share) comes first
-    assert list(result["country"]) == ["P", "Q"]
+    expected = (
+        100
+        * result["attractiveness"]
+        * (1 - result["share_pct"])
+        * result["materiality"]
+        * (0.5 + 0.5 * result["confidence"])
+    )
+    assert result["opportunity_score"].tolist() == pytest.approx(expected.tolist())
+    assert result["opportunity_score"].between(0, 100).all()
+    assert result["opportunity_score"].is_monotonic_decreasing
+
+
+def test_materiality_measures_tons_a_year_against_one_container(
+    con: duckdb.DuckDBPyConnection,
+) -> None:
+    # 10 periods, 25 t a year exactly -> half-way; 1 t a year -> barely material
+    _insert(
+        con,
+        _market("Container", [25_000] * 10, tons_per_dollar=0.001)
+        + _market("Tiny", [25_000] * 10, tons_per_dollar=0.00004),
+    )
+
+    by_country = rank_markets(
+        con, product_level="ncm_code", product_value=PRODUCT_A, geo_level="country"
+    ).set_index("country")
+
+    assert by_country.loc["Container", "tons_per_year"] == pytest.approx(25)
+    assert by_country.loc["Container", "materiality"] == pytest.approx(0.5)
+    assert by_country.loc["Tiny", "materiality"] == pytest.approx(1 / 26)
+
+
+def test_a_tiny_fast_grower_ranks_below_a_material_steady_one(
+    con: duckdb.DuckDBPyConnection,
+) -> None:
+    """The failure the index exists to fix: the old score ranked Vanuatu
+    (3 t a year, explosive growth) above real markets."""
+    explosive = [10 * 3**i for i in range(10)]
+    _insert(
+        con,
+        _market("Tiny", explosive, tons_per_dollar=0.000001)
+        + _market("Real", STEADY, tons_per_dollar=0.1),
+    )
+
+    result = rank_markets(
+        con, product_level="ncm_code", product_value=PRODUCT_A, geo_level="country"
+    ).set_index("country")
+
+    assert result.loc["Tiny", "annual_growth_pct"] > result.loc["Real", "annual_growth_pct"]
+    assert result.loc["Real", "opportunity_score"] > result.loc["Tiny", "opportunity_score"]
+
+
+def test_a_saturated_market_is_discounted_by_its_share(con: duckdb.DuckDBPyConnection) -> None:
+    # identical shapes; "Saturated" is 9x bigger, so it holds 90% of the latest period
+    _insert(
+        con,
+        _market("Open", STEADY, tons_per_dollar=1.0)
+        + _market("Saturated", [v * 9 for v in STEADY], tons_per_dollar=1.0),
+    )
+
+    result = rank_markets(
+        con, product_level="ncm_code", product_value=PRODUCT_A, geo_level="country"
+    ).set_index("country")
+
+    assert result.loc["Saturated", "share_pct"] == pytest.approx(0.9)
+    assert result.loc["Saturated", "attractiveness"] > result.loc["Open", "attractiveness"]
+    assert result.loc["Open", "opportunity_score"] > result.loc["Saturated", "opportunity_score"]
+
+
+def test_recent_components_reward_recent_constant_growth(con: duckdb.DuckDBPyConnection) -> None:
+    flat_then_up = [1_000] * 6 + [1_000, 1_500, 2_250, 3_375]
+    up_then_flat = [100 * 1.5**i for i in range(6)] + [759] * 4
+    _insert(con, _market("Rising", flat_then_up) + _market("Stalled", up_then_flat))
+
+    by_country = rank_markets(
+        con, product_level="ncm_code", product_value=PRODUCT_A, geo_level="country"
+    ).set_index("country")
+
+    rising, stalled = by_country.loc["Rising"], by_country.loc["Stalled"]
+    assert rising["recent_growth_pct"] == pytest.approx(0.5)  # x1.5 a year, last 4 periods
+    assert rising["recent_consistency"] == pytest.approx(1.0)  # 3 of 3 changes up
+    assert stalled["recent_growth_pct"] == pytest.approx(0.0, abs=1e-9)
+    assert stalled["recent_consistency"] == pytest.approx(0.0)
+
+
+def test_price_trend_is_the_yearly_change_in_price_per_ton(
+    con: duckdb.DuckDBPyConnection,
+) -> None:
+    # value steady, tons falling 20% a year -> $/t rising 25% a year
+    rows = [
+        {
+            "year": 2017 + i,
+            "fob_usd": 1_000.0,
+            "metric_ton": 10 * 0.8**i,
+            "ncm_code": PRODUCT_A,
+            "country": "Pricier",
+        }
+        for i in range(10)
+    ]
+    _insert(con, rows)
+
+    row = rank_markets(
+        con, product_level="ncm_code", product_value=PRODUCT_A, geo_level="country"
+    ).iloc[0]
+
+    assert row["price_trend_pct"] == pytest.approx(0.25)
+
+
+def test_components_needing_three_points_are_missing_not_zero(
+    con: duckdb.DuckDBPyConnection,
+) -> None:
+    # sales in only 2 of the last 4 periods -> no recent growth fit
+    _insert(con, _market("Gappy", [1_000] * 6 + [0, 0, 1_200, 1_400]))
+
+    row = rank_markets(
+        con, product_level="ncm_code", product_value=PRODUCT_A, geo_level="country"
+    ).iloc[0]
+
+    assert pd.isna(row["recent_growth_pct"])
+    # last 4 periods: 0, 0, 1,200, 1,400 - changes from zero are skipped (no
+    # base to grow from), leaving one change, and it was up
+    assert row["recent_consistency"] == pytest.approx(1.0)
 
 
 def test_unit_price_is_sum_then_divide_not_row_average(con: duckdb.DuckDBPyConnection) -> None:

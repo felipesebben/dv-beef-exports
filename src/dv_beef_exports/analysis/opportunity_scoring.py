@@ -1,7 +1,7 @@
 """
-Opportunity scoring and confidence, per
-docs/decisions/0005-opportunity-scoring-methodology.md (amended
-2026-09-12 for adjusted R²).
+Opportunity index and confidence, per
+docs/decisions/0006-opportunity-index.md (which replaces 0005's
+growth x (1 - share) score) and 0005 for confidence.
 
 Both "lenses" the product needs — product fixed -> rank markets, and
 country fixed -> rank products — are the same underlying query, pivoted
@@ -16,6 +16,7 @@ from __future__ import annotations
 import math
 
 import duckdb
+import numpy as np
 import pandas as pd
 
 # level name -> real marts.exports column, or None for "overall" (collapse
@@ -39,11 +40,29 @@ _OUTPUT_COLUMNS = [
     "volume_confidence",
     "confidence",
     "share_pct",
+    "recent_growth_pct",
+    "recent_consistency",
+    "price_trend_pct",
+    "tons_per_year",
+    "materiality",
+    "attractiveness",
     "opportunity_score",
     "total_fob_usd",
     "total_metric_ton",
     "unit_price_usd_per_ton",
 ]
+
+# The opportunity index (ADR 0006):
+#   100 x attractiveness x headroom x materiality x evidence
+# attractiveness = these weights over percentile ranks within the ranked set
+INDEX_WEIGHTS = {"momentum": 0.30, "recent": 0.30, "size": 0.20, "price": 0.20}
+# within "recent": recent growth vs how consistently it rose
+RECENT_GROWTH_WEIGHT, RECENT_CONSISTENCY_WEIGHT = 0.6, 0.4
+# the last N 12-month periods count as "recent"
+RECENT_PERIODS = 4
+# ~ one 40-ft reefer container of frozen beef: a market buying one container
+# a year scores 0.5 on materiality, ten containers ~0.9
+CONTAINER_TONS = 25.0
 
 # One-line meaning of every output column, shown as the app's column-header
 # tooltips. Must match the "Quick reference" table in
@@ -57,7 +76,13 @@ METRIC_GLOSSARY: dict[str, str] = {
     "volume_confidence": "how large this group is vs. a typical one",
     "confidence": "all three evidence legs combined (geometric mean)",
     "share_pct": "slice of the fixed axis already held, latest 12 months",
-    "opportunity_score": "growth, discounted by share already held",
+    "recent_growth_pct": "yearly growth over the last 4 periods",
+    "recent_consistency": "share of the last 3 year-on-year changes that were up",
+    "price_trend_pct": "yearly change in the average price per ton",
+    "tons_per_year": "average tons a year, in years with sales",
+    "materiality": "commercial size: tons a year vs. one 25-ton container",
+    "attractiveness": "growth, recent momentum, size and price trend, ranked",
+    "opportunity_score": "0-100 index: attractiveness x headroom x materiality x evidence",
     "total_fob_usd": "total export value in the window",
     "total_metric_ton": "total export weight in the window",
     "unit_price_usd_per_ton": "realised average price, sum-then-divide",
@@ -361,6 +386,18 @@ def _score_opportunities(
     if trend.empty:
         return pd.DataFrame(columns=[ranked_col, *_OUTPUT_COLUMNS])
 
+    # every group's per-period series (positive periods only), for the
+    # recent-momentum and price-trend components - from the same window +
+    # leading-trim CTEs as the trend fit, so the two can't disagree
+    series_sql = f"""
+        WITH {_trimmed_periods_ctes(ranked_col, fixed_filter_sql)}
+        SELECT group_value, periods_ago, fob_usd, metric_ton, substantial_so_far > 0 AS in_fit
+        FROM flagged
+    """
+    series = con.execute(
+        series_sql, [latest_idx, window_years, *fixed_params, _LEADING_TRIM_FRACTION]
+    ).df()
+
     recent_sql = f"""
         SELECT {ranked_col} AS group_value, sum(fob_usd) AS fob_usd
         FROM ({_PERIODIZED_SQL})
@@ -409,7 +446,17 @@ def _score_opportunities(
     result["share_pct"] = (
         result["recent_year_fob_usd"] / total_recent_fob if total_recent_fob else 0.0
     )
-    result["opportunity_score"] = result["annual_growth_pct"] * (1 - result["share_pct"])
+    result = result.merge(_period_components(series), on="group_value", how="left")
+    result["tons_per_year"] = result["total_metric_ton"] / result["years_active"]
+    result["materiality"] = result["tons_per_year"] / (result["tons_per_year"] + CONTAINER_TONS)
+    result["attractiveness"] = _attractiveness(result)
+    result["opportunity_score"] = (
+        100
+        * result["attractiveness"]
+        * (1 - result["share_pct"])  # headroom: the part not already Brazil's
+        * result["materiality"]
+        * (0.5 + 0.5 * result["confidence"])  # evidence: thin evidence halves it
+    )
 
     # sum-then-divide at this query's own aggregation grain, over the same
     # trailing window as everything else - never an average of row-level
@@ -421,4 +468,63 @@ def _score_opportunities(
         result[[ranked_col, *_OUTPUT_COLUMNS]]
         .sort_values("opportunity_score", ascending=False)
         .reset_index(drop=True)
+    )
+
+
+def _log_linear_growth(periods_ago: pd.Series, values: pd.Series) -> float:
+    """exp(slope) - 1 of ln(values) over time (-periods_ago), the same
+    log-linear form as annual_growth_pct; NaN with fewer than 3 points."""
+    if len(values) < 3:
+        return np.nan
+    slope = np.polyfit(-periods_ago.to_numpy(float), np.log(values.to_numpy(float)), 1)[0]
+    return math.exp(slope) - 1
+
+
+def _period_components(series: pd.DataFrame) -> pd.DataFrame:
+    """Per group: recent_growth_pct, recent_consistency, price_trend_pct."""
+    rows = []
+    recent_range = range(RECENT_PERIODS - 1, -1, -1)  # oldest -> newest
+    for group, periods in series.groupby("group_value", sort=False):
+        recent = periods[periods["periods_ago"] < RECENT_PERIODS]
+        # zero-filled: a period with no sales is a real "down", not missing
+        recent_fob = recent.set_index("periods_ago")["fob_usd"].reindex(recent_range, fill_value=0)
+        changes = [
+            recent_fob[p] > recent_fob[p + 1]
+            for p in range(RECENT_PERIODS - 2, -1, -1)
+            if recent_fob[p + 1] > 0
+        ]
+        priced = periods[periods["in_fit"] & (periods["metric_ton"] > 0)]
+        rows.append(
+            {
+                "group_value": group,
+                "recent_growth_pct": _log_linear_growth(recent["periods_ago"], recent["fob_usd"]),
+                "recent_consistency": float(np.mean(changes)) if changes else np.nan,
+                "price_trend_pct": _log_linear_growth(
+                    priced["periods_ago"], priced["fob_usd"] / priced["metric_ton"]
+                ),
+            }
+        )
+    return pd.DataFrame(
+        rows, columns=["group_value", "recent_growth_pct", "recent_consistency", "price_trend_pct"]
+    )
+
+
+def _percentile(values: pd.Series) -> pd.Series:
+    """Percentile rank within the ranked set, 0-1; missing values sit at the
+    neutral middle rather than being rewarded or punished."""
+    return values.rank(pct=True).fillna(0.5)
+
+
+def _attractiveness(result: pd.DataFrame) -> pd.Series:
+    """Weighted percentile ranks - scale-free, so products of very different
+    sizes stay comparable, and no single extreme value dominates."""
+    parts = {
+        "momentum": _percentile(result["annual_growth_pct"]),
+        "recent": RECENT_GROWTH_WEIGHT * _percentile(result["recent_growth_pct"])
+        + RECENT_CONSISTENCY_WEIGHT * _percentile(result["recent_consistency"]),
+        "size": _percentile(np.log10(result["total_fob_usd"] / result["years_active"])),
+        "price": _percentile(result["price_trend_pct"]),
+    }
+    return sum(INDEX_WEIGHTS[name] * part for name, part in parts.items()) / sum(
+        INDEX_WEIGHTS.values()
     )

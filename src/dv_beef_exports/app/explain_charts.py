@@ -302,56 +302,6 @@ def share_context(
     return (line + end_label).properties(title=_title(*title), height=HEIGHT)
 
 
-def score_context(peers: pd.DataFrame, subject: str, noun_plural: str) -> alt.LayerChart:
-    """Every ranked result's growth vs share - the two halves of the score."""
-    data = peers[["name", "annual_growth_pct", "share_pct", "opportunity_score"]].dropna()
-    data = data.assign(is_subject=data["name"] == subject)
-    # keep a handful of extreme growth rates from flattening everyone else
-    high = max(
-        data["annual_growth_pct"].quantile(0.95),
-        float(
-            data.loc[data["is_subject"], "annual_growth_pct"].max()
-            if data["is_subject"].any()
-            else 0
-        ),
-    )
-    x_scale = alt.Scale(domain=[min(data["annual_growth_pct"].min(), 0), high], clamp=True)
-    tooltip = [
-        alt.Tooltip("name:N", title="Name"),
-        alt.Tooltip("annual_growth_pct:Q", title="Growth / yr", format="+.0%"),
-        alt.Tooltip("share_pct:Q", title="Share", format=".1%"),
-        alt.Tooltip("opportunity_score:Q", title="Score", format=".2f"),
-    ]
-    base = alt.Chart(data).encode(
-        x=alt.X(
-            "annual_growth_pct:Q",
-            title="Growth per year",
-            scale=x_scale,
-            axis=alt.Axis(format="+.0%"),
-        ),
-        y=alt.Y("share_pct:Q", title="Share", axis=alt.Axis(format=".0%")),
-        tooltip=tooltip,
-    )
-    others = base.transform_filter(~alt.datum.is_subject).mark_circle(
-        size=40, color=PEER, opacity=0.9
-    )
-    selected = base.transform_filter(alt.datum.is_subject).mark_circle(
-        size=140, color=HIGHLIGHT, stroke="white", strokeWidth=2
-    )
-    label = (
-        base.transform_filter(alt.datum.is_subject)
-        .mark_text(align="left", dx=10, fontWeight="bold", color=CHART_INK)
-        .encode(text="name:N")
-    )
-    return (others + selected + label).properties(
-        title=_title(
-            f"Growth vs. share, all {len(data)} {noun_plural}",
-            "Bottom-right - fast growth, low share - scores highest",
-        ),
-        height=HEIGHT,
-    )
-
-
 def coverage_context(history: pd.DataFrame) -> alt.Chart:
     """Which 12-month periods in the window had sales: one cell per period."""
     data = _with_periods(history).assign(
@@ -478,16 +428,24 @@ def size_context(history: pd.DataFrame) -> alt.VConcatChart:
         )
         .properties(title=_title("Value each 12-month period"), height=130)
     )
-    weight = (
-        base.mark_bar(color=HIGHLIGHT, cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
-        .encode(
-            y=alt.Y("metric_ton:Q", title="Tons", axis=alt.Axis(labelExpr=TONS_AXIS_LABELS)),
-            tooltip=[
-                alt.Tooltip("period:N", title="Period"),
-                alt.Tooltip("metric_ton:Q", title="Tons", format=",.1f"),
-            ],
-        )
-        .properties(title=_title("Tons each 12-month period"), height=130)
+    weight = base.mark_bar(color=HIGHLIGHT, cornerRadiusTopLeft=3, cornerRadiusTopRight=3).encode(
+        y=alt.Y("metric_ton:Q", title="Tons", axis=alt.Axis(labelExpr=TONS_AXIS_LABELS)),
+        tooltip=[
+            alt.Tooltip("period:N", title="Period"),
+            alt.Tooltip("metric_ton:Q", title="Tons", format=",.1f"),
+        ],
+    )
+    # one 40-ft reefer container a year - the index's materiality anchor
+    container = pd.DataFrame({"y": [25.0], "text": ["one container a year (25 t)"]})
+    container_rule = alt.Chart(container).mark_rule(color=CHART_INK, strokeWidth=1).encode(y="y:Q")
+    container_label = (
+        alt.Chart(container)
+        .mark_text(align="left", baseline="bottom", dx=2, dy=-2, fontSize=10, color=CHART_INK)
+        .encode(x=alt.value(0), y="y:Q", text="text:N")
+    )
+    weight = (weight + container_rule + container_label).properties(
+        title=_title("Tons each 12-month period", "The line marks one 25-ton container a year"),
+        height=130,
     )
     return alt.vconcat(value, weight, spacing=18)
 
@@ -558,3 +516,76 @@ def fmt_price(v: float) -> str:
 
 def fmt_tons(v: float) -> str:
     return tons(v)
+
+
+def recent_context(history: pd.DataFrame, recent_periods: int = 4) -> alt.Chart | None:
+    """The last few 12-month totals - what recent momentum is read from."""
+    data = _with_periods(history).tail(recent_periods)
+    if data["fob_usd"].le(0).all():
+        return None
+    previous = data["fob_usd"].shift(1)
+    data = data.assign(
+        direction=[
+            "Up" if p > 0 and v > p else ("Down" if p > 0 else "No earlier year to compare")
+            for v, p in zip(data["fob_usd"], previous.fillna(0), strict=True)
+        ],
+        label=[money(v) if v > 0 else "none" for v in data["fob_usd"]],
+    )
+    base = alt.Chart(data).encode(x=_period_x())
+    bars = base.mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3).encode(
+        y=alt.Y("fob_usd:Q", title="Sales", axis=alt.Axis(labelExpr=MONEY_AXIS_LABELS)),
+        color=alt.Color(
+            "direction:N",
+            scale=alt.Scale(
+                domain=["Up", "Down", "No earlier year to compare"], range=[UP, DOWN, PEER]
+            ),
+            legend=alt.Legend(title=None, orient="top", direction="horizontal", labelLimit=0),
+        ),
+        tooltip=[
+            alt.Tooltip("period:N", title="Period"),
+            alt.Tooltip("fob_usd:Q", title="12-month total", format="$,.0f"),
+        ],
+    )
+    labels = base.mark_text(dy=-6, fontSize=11, color=CHART_INK).encode(
+        y="fob_usd:Q", text="label:N"
+    )
+    return (bars + labels).properties(
+        title=_title(
+            f"The last {len(data)} years",
+            "Each bar: one 12-month total, coloured by whether it rose on the year before",
+        ),
+        height=HEIGHT,
+    )
+
+
+def index_breakdown(factors: dict[str, float]) -> alt.LayerChart:
+    """The four factors the index multiplies, the weakest emphasised."""
+    weakest = min(factors, key=factors.get)
+    data = pd.DataFrame(
+        {
+            "factor": [name.capitalize() for name in factors],
+            "value": list(factors.values()),
+            "is_weakest": [name == weakest for name in factors],
+            "label": [f"{v:.2f}" for v in factors.values()],
+        }
+    )
+    base = alt.Chart(data).encode(
+        y=alt.Y("factor:N", sort=None, title=None, axis=alt.Axis(domain=False)),
+    )
+    bars = base.mark_bar(cornerRadiusEnd=3, height={"band": 0.6}).encode(
+        x=alt.X("value:Q", title="Factor (1 = best)", scale=alt.Scale(domain=[0, 1])),
+        color=alt.condition(alt.datum.is_weakest, alt.value(EMPHASIS), alt.value(HIGHLIGHT)),
+        tooltip=[alt.Tooltip("factor:N", title="Factor"), alt.Tooltip("value:Q", format=".2f")],
+    )
+    labels = base.mark_text(align="left", dx=4, color=CHART_INK).encode(x="value:Q", text="label:N")
+    return (bars + labels).properties(
+        title=_title(
+            "What the index is made of",
+            f"Index = 100 x all four multiplied; the weakest ({weakest}, orange) costs most",
+        ),
+        height=alt.Step(30),
+    )
+
+
+def fmt_index(v: float) -> str:
+    return f"{v:.0f}"

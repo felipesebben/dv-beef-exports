@@ -12,7 +12,10 @@ from dv_beef_exports.app.explanations import (
     explain_all,
     explain_confidence,
     explain_growth,
+    explain_recent,
+    explain_score,
     explain_share,
+    explain_size,
     explain_unit_price,
     growth_drivers,
     implied_typical_size,
@@ -47,7 +50,13 @@ def _row(**overrides) -> pd.Series:
         "volume_confidence": 0.855518,
         "confidence": 0.855584,
         "share_pct": 0.002146,
-        "opportunity_score": 1.513201,
+        "recent_growth_pct": 0.75326,
+        "recent_consistency": 0.666667,
+        "price_trend_pct": -0.062873,
+        "tons_per_year": 22.77775,
+        "materiality": 0.476744,
+        "attractiveness": 0.709729,
+        "opportunity_score": 31.325281,
         "total_fob_usd": 308_611.0,
         "total_metric_ton": 182.222,
         "unit_price_usd_per_ton": 1693.6,
@@ -107,14 +116,15 @@ def test_explain_all_covers_each_metric_once() -> None:
 
     assert [e.key for e in explanations] == [
         "annual_growth_pct",
+        "recent_growth_pct",
         "trend_r2_adj",
         "share_pct",
+        "total_fob_usd",
+        "unit_price_usd_per_ton",
         "opportunity_score",
         "coverage_score",
         "volume_confidence",
         "confidence",
-        "total_fob_usd",
-        "unit_price_usd_per_ton",
     ]
     assert all(e.meaning and e.for_you and e.action for e in explanations)
 
@@ -249,3 +259,52 @@ def test_concentration_note_only_when_one_destination_dominates() -> None:
 
     assert "**China alone took 53%**" in concentration_note(dominated, "country")
     assert concentration_note(spread, "country") is None
+
+
+def test_score_explains_the_index_through_its_four_factors() -> None:
+    explanation = explain_score(_row(), SEL)
+
+    assert explanation.value == "31 / 100"
+    assert "attractiveness **0.71**" in explanation.for_you
+    assert "commercial size **0.48**" in explanation.for_you
+    # commercial size (0.48) is Singapore's weakest factor
+    assert "what holds it back most is commercial size" in explanation.action
+
+
+def test_score_does_not_invent_a_weakness_when_every_factor_is_strong() -> None:
+    strong = explain_score(
+        _row(attractiveness=0.95, materiality=1.0, share_pct=0.03, confidence=0.86), SEL
+    )
+
+    assert "every factor is strong" in strong.action
+
+
+def test_recent_momentum_wording() -> None:
+    accelerating = explain_recent(_row(), SEL)
+    falling = explain_recent(_row(recent_growth_pct=-0.2, recent_consistency=0.0), SEL)
+    patchy = explain_recent(_row(recent_growth_pct=float("nan")), SEL)
+
+    assert accelerating.value == "+75%/yr"
+    assert "67% of the last year-on-year changes were up" in accelerating.for_you
+    assert "flat or falling" in falling.action
+    assert patchy.value == "n/a"
+
+
+def test_size_speaks_in_containers() -> None:
+    small = explain_size(_row(), SEL)  # 22.8 t a year
+    big = explain_size(_row(tons_per_year=500.0), SEL)
+
+    assert "under one 25-ton container a year" in small.for_you
+    assert "Less than one container a year" in small.action
+    assert "about **20 containers a year**" in big.for_you
+
+
+def test_price_reads_level_and_trend() -> None:
+    peers = pd.DataFrame({"unit_price_usd_per_ton": [1000.0, 2000.0, 3000.0]})
+
+    falling = explain_unit_price(_row(), SEL, peers)
+    rising = explain_unit_price(_row(price_trend_pct=0.10), SEL, peers)
+
+    assert "about **-6% a year**" in falling.for_you
+    assert "Falling prices" in falling.action
+    assert "Rising prices" in rising.action

@@ -273,40 +273,100 @@ def explain_share(row: pd.Series, sel: Selection) -> MetricExplanation:
     )
 
 
+# an index factor at or above this isn't worth calling out as a weakness
+STRONG_FACTOR = 0.85
+
+
+def index_factors(row: pd.Series) -> dict[str, float]:
+    """The four factors the opportunity index multiplies, each 0-1."""
+    return {
+        "attractiveness": row["attractiveness"],
+        "room to grow": 1 - row["share_pct"],
+        "commercial size": row["materiality"],
+        "evidence": 0.5 + 0.5 * row["confidence"],
+    }
+
+
 def explain_score(row: pd.Series, sel: Selection) -> MetricExplanation:
-    score, g, s = row["opportunity_score"], row["annual_growth_pct"], row["share_pct"]
+    score = row["opportunity_score"]
+    factors = index_factors(row)
+    weakest = min(factors, key=factors.get)
     top = sel.rank <= max(5, round(sel.n_ranked * 0.1))
-    if score <= 0:
-        action = "Not an opportunity on these numbers - the trade is shrinking."
-    elif top:
-        action = (
-            f"Ranked **#{sel.rank} of {sel.n_ranked}** - a shortlist candidate. Before "
-            "acting, check confidence and size below: the score alone doesn't say "
-            "whether the market is reliable or big enough."
-        )
+    held_back = {
+        "attractiveness": "its growth, momentum, size or price trend rank low against the rest",
+        "room to grow": "Brazil already holds much of this trade",
+        "commercial size": "the volumes are small - few containers a year",
+        "evidence": "the evidence behind the trend is thin",
+    }[weakest]
+    # naming a "weakest" factor only helps when it's actually weak
+    if factors[weakest] >= STRONG_FACTOR:
+        limit = "every factor is strong - nothing holds it back much"
     else:
-        action = (
-            f"Ranked #{sel.rank} of {sel.n_ranked} - not a top lead by score, though it "
-            "may still matter for size or strategic reasons."
-        )
+        limit = f"what holds it back most is {weakest} - {held_back}"
+    if top:
+        action = f"Ranked **#{sel.rank} of {sel.n_ranked}** - a shortlist candidate: {limit}."
+    else:
+        action = f"Ranked #{sel.rank} of {sel.n_ranked}: {limit}."
+    breakdown = ", ".join(f"{name} **{value:.2f}**" for name, value in factors.items())
     return MetricExplanation(
         key="opportunity_score",
-        title="Opportunity score",
-        value=f"{score:.2f}",
+        title="Opportunity index",
+        value=f"{score:.0f} / 100",
         meaning=(
-            "One number to rank by: the growth rate, discounted by how much of the market "
-            "Brazil already holds. Fast growth with lots of room left scores highest."
+            "One 0-100 number to rank by. It multiplies four factors, each from 0 to 1: "
+            "**attractiveness** (long-run growth, recent momentum, size and price trend, "
+            "each ranked against the rest), **room to grow** (the part not already "
+            "Brazil's), **commercial size** (tons a year against one 25-ton container) and "
+            "**evidence** (how much to trust the trend). Because they multiply, one weak "
+            "factor pulls the whole index down."
         ),
-        for_you=(
-            f"{_cap(sel.subject_label)} scores **{score:.2f}**: growing {g * 100:+.0f}%/yr with "
-            + ("virtually all" if s < 0.001 else pct(1 - s, 1))
-            + " of the room still open."
-        ),
+        for_you=f"{_cap(sel.subject_label)} scores **{score:.0f}**: {breakdown}.",
         action=action,
         caveat=(
-            "It's a ranking, not a measure of size or value: 1.5 vs 0.9 means "
-            '"ranks higher", not "1.7x better".'
+            'A ranking key, not a forecast: 60 vs 30 means "ranks higher", not "twice as '
+            "good\". It's also relative to what's ranked, so the same market can score "
+            "differently in another query."
         ),
+    )
+
+
+def explain_recent(row: pd.Series, sel: Selection) -> MetricExplanation:
+    g, c = row["recent_growth_pct"], row["recent_consistency"]
+    if pd.isna(g):
+        for_you = (
+            f"{sel.flow} didn't sell in enough of the last 4 years to measure recent momentum."
+        )
+        action = "Recent history is too patchy to read - lean on the long-run figures."
+        value = "n/a"
+    else:
+        ups = "" if pd.isna(c) else f", and {pct(c)} of the last year-on-year changes were up"
+        for_you = f"Over the last 4 years, {sel.flow} grew about **{g * 100:+.0f}% a year**{ups}."
+        long_run = row["annual_growth_pct"]
+        if g > long_run and (pd.isna(c) or c >= 0.67):
+            action = (
+                "Accelerating, and consistently - the momentum is recent and real. The "
+                "strongest kind of signal for a lead."
+            )
+        elif g > 0 and (pd.isna(c) or c >= 0.67):
+            action = "Still growing steadily in recent years - the trend is holding."
+        elif g > 0:
+            action = "Growing recently, but unevenly - check the yearly bars before relying on it."
+        else:
+            action = (
+                "Recent years are flat or falling, whatever the long-run rate says - find out "
+                "what changed."
+            )
+        value = f"{g * 100:+.0f}%/yr"
+    return MetricExplanation(
+        key="recent_growth_pct",
+        title="Recent momentum",
+        value=value,
+        meaning=(
+            "Growth over just the last 4 years, and how consistently it rose. It rewards "
+            "growth that is recent and steady over growth that happened years ago."
+        ),
+        for_you=for_you,
+        action=action,
     )
 
 
@@ -419,61 +479,83 @@ def explain_confidence(row: pd.Series, sel: Selection) -> MetricExplanation:
 
 def explain_size(row: pd.Series, sel: Selection) -> MetricExplanation:
     total, t, n = row["total_fob_usd"], row["total_metric_ton"], int(row["years_active"])
-    per_year = total / n
-    if per_year >= 1e6:
+    per_year, tons_year = total / n, row["tons_per_year"]
+    containers = tons_year / 25
+    if containers >= 10:
         action = "A commercially significant flow - large enough to justify dedicated effort."
-    elif per_year >= 1e5:
-        action = "A mid-sized flow - worth pursuing if it fits your existing routes and buyers."
+    elif containers >= 1:
+        action = "A real, regular flow - worth pursuing if it fits your existing routes and buyers."
     else:
         action = (
-            "Small in absolute terms. Even fast, steady growth here may not justify a "
-            "sales effort on its own - consider it alongside nearby markets."
+            "Less than one container a year. Even fast, steady growth here may not justify a "
+            "sales effort on its own - the index discounts it heavily."
         )
+    container_text = (
+        "under one 25-ton container a year"
+        if containers < 1
+        else f"about **{containers:,.0f} container{'s' if round(containers) != 1 else ''} a year**"
+    )
     return MetricExplanation(
         key="total_fob_usd",
         title="Size of the trade",
         value=money(total),
         meaning=(
-            "How much was actually sold - the figure the percentages above deliberately ignore."
+            "How much was actually sold. The index measures size in tons a year against one "
+            "25-ton reefer container: one container a year counts half, ten nearly in full."
         ),
         for_you=(
             f"Over the window, {sel.flow} added up to **{money(total)}** and "
-            f"**{tons(t)}** - about **{money(per_year)} a year** in the years it happened."
+            f"**{tons(t)}** - about {money(per_year)} and {tons(tons_year)} a year, "
+            f"{container_text}."
         ),
         action=action,
     )
 
 
 def explain_unit_price(row: pd.Series, sel: Selection, peers: pd.DataFrame) -> MetricExplanation:
-    price = row["unit_price_usd_per_ton"]
+    price, trend = row["unit_price_usd_per_ton"], row["price_trend_pct"]
     peer_median = peers["unit_price_usd_per_ton"].median()
     diff = price / peer_median - 1
     if diff > 0.1:
         position = f"**{pct(diff)} above** the median"
-        action = "Pays a premium - possibly higher-value cuts or a less price-sensitive market."
     elif diff < -0.1:
         position = f"**{pct(-diff)} below** the median"
-        action = "Pays a discount - a price-driven market; margins may be thinner."
     else:
         position = "**in line with** the median"
-        action = "Prices in line with the rest - no premium or discount signal."
+    if pd.isna(trend):
+        trend_text = "Not enough priced years to measure a trend."
+        action = "No price trend to read yet."
+    else:
+        trend_text = f"The price has moved about **{trend * 100:+.0f}% a year**."
+        if trend > 0.02:
+            action = (
+                "Rising prices - the market is paying more over time, which makes growth "
+                "there more valuable."
+            )
+        elif trend < -0.02:
+            action = (
+                "Falling prices - growth there may come at thinner margins; check whether "
+                "the mix shifted toward cheaper cuts."
+            )
+        else:
+            action = "Prices broadly stable."
     return MetricExplanation(
         key="unit_price_usd_per_ton",
-        title="Average price",
+        title="Price",
         value=f"${price:,.0f}/t",
         meaning=(
-            "The average price per ton Brazil got for this trade over the window - total "
-            "value divided by total weight."
+            "The average price per ton (total value divided by total weight), and how it "
+            "has moved year by year. A rising price counts toward the index."
         ),
         for_you=(
             f"{sel.flow} averaged **${price:,.0f} per ton**, {position} of "
             f"${peer_median:,.0f}/t across the {sel.n_ranked} {plural(sel.ranked_noun)} ranked "
-            "in this query."
+            f"in this query. {trend_text}"
         ),
         action=action,
         caveat=(
-            "An average across all cuts and qualities within the product code - it hides "
-            "the mix, so treat it as a signal, not a price quote."
+            "An average across all cuts and qualities within the product code - a change "
+            "can be a shift in mix, not new prices."
         ),
     )
 
@@ -481,19 +563,20 @@ def explain_unit_price(row: pd.Series, sel: Selection, peers: pd.DataFrame) -> M
 def explain_all(
     row: pd.Series, sel: Selection, history: pd.DataFrame, peers: pd.DataFrame
 ) -> list[MetricExplanation]:
-    """Every metric, in the order a reader should take them: how fast, how
-    steady, how much room, the score that combines those, then the evidence
-    behind it, then size and price."""
+    """Every metric, in the order a reader should take them: the index's
+    ingredients (growth, momentum, steadiness, room, size, price), the index
+    that combines them, then the evidence behind it."""
     return [
         explain_growth(row, sel, history),
+        explain_recent(row, sel),
         explain_trend_fit(row, sel),
         explain_share(row, sel),
+        explain_size(row, sel),
+        explain_unit_price(row, sel, peers),
         explain_score(row, sel),
         explain_coverage(row, sel),
         explain_volume_confidence(row, sel),
         explain_confidence(row, sel),
-        explain_size(row, sel),
-        explain_unit_price(row, sel, peers),
     ]
 
 
