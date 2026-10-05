@@ -208,3 +208,26 @@ something worth remembering (see `docs/WORKFLOW.md`).
   import path since Community Cloud isn't documented to install the project.
   Verified in a fresh environment without the package, from another folder.
 
+## 2026-10-05 — Frontend UX review
+- Reviewed all three pages at phone and desktop width (headless Chrome
+  screenshots), for a business reader on a phone.
+- **Who-buys-what is now an HTML table** (`st.html`): it scrolls sideways
+  on a phone with the destination column pinned - the Altair heatmap
+  squeezed 11 columns into ~390px. Per-column shading kept; details on
+  hover / long-press.
+- **Sidebar query modernised**: one searchable picker per side (the same
+  options as the overview) instead of a level dropdown then a value
+  dropdown; plain labels ("Best markets / Best products", "Compare"); the
+  history window and minimum years moved under "Advanced". Each ranking
+  page shows the current query in one line, since the sidebar hides behind
+  the menu on phones.
+- **Products shown by name everywhere** - ranking products used to show
+  bare NCM codes in the Opportunities chart and table.
+- Plain-language table columns matching the Explain page ("Trend
+  steadiness", not "Trend fit (adj. R²)"); confidence as a bar; key
+  columns first, name pinned. Formula and file paths removed from the UI.
+- Charts: compact money axes ("$20B"), short period labels ("Sep '25–Aug
+  '26"). Explain cards lead with the selection and the action; the generic
+  definition sits behind "What this measures".
+- Light theme forced (`.streamlit/config.toml`) - the styling assumes it.
+

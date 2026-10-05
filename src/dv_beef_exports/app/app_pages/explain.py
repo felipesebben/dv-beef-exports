@@ -12,11 +12,14 @@ import streamlit as st
 
 from dv_beef_exports.analysis.opportunity_scoring import period_history
 from dv_beef_exports.app.common import (
+    MONEY_AXIS_LABELS,
     RANKED_NOUNS,
     connection,
     geo_label,
+    period_label,
     product_label,
     product_phrase,
+    query_summary,
     style_chart,
 )
 from dv_beef_exports.app.explanations import Selection, bottom_line, explain_all
@@ -38,7 +41,7 @@ def _history_chart(history: pd.DataFrame, log_scale: bool) -> alt.LayerChart:
         trend=history["trend_fob_usd"].where(history["in_fit"]),
         # spell out the whole 12-month block, so no bar reads as a single month
         period=[
-            f"{start:%b %Y}–{end:%b %Y}"
+            period_label(start, end)
             for start, end in zip(history["period_start"], history["period_end"], strict=True)
         ],
     )
@@ -54,8 +57,8 @@ def _history_chart(history: pd.DataFrame, log_scale: bool) -> alt.LayerChart:
         x=alt.X(
             "period:N",
             sort=None,  # keep chronological (data) order, not alphabetical
-            title="12-month period (one bar = the total for all 12 months)",
-            axis=alt.Axis(labelAngle=-35),
+            title="Each bar = the total for one 12-month period",
+            axis=alt.Axis(labelAngle=-40),
         ),
     )
     tooltip = [
@@ -65,7 +68,12 @@ def _history_chart(history: pd.DataFrame, log_scale: bool) -> alt.LayerChart:
         alt.Tooltip("metric_ton:Q", title="Total tons in these 12 months", format=",.1f"),
     ]
     bars = base.mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
-        y=alt.Y("fob_usd:Q", title="Total sold in the 12-month period (USD)", scale=y_scale),
+        y=alt.Y(
+            "fob_usd:Q",
+            title="Total sold in the 12-month period",
+            scale=y_scale,
+            axis=alt.Axis(labelExpr=MONEY_AXIS_LABELS),
+        ),
         color=alt.Color("status:N", scale=colors, legend=legend),
         tooltip=tooltip,
     )
@@ -126,11 +134,11 @@ def _history_for(subject: str, query: dict) -> pd.DataFrame:
 
 st.title("Explain the numbers")
 st.caption(
-    "Every metric for one result of your query, in plain language - what it means, "
-    "what it says for your selection, and what to do with it. Change the query in the sidebar."
+    "Every number behind one result, in plain language: what it says for this market and "
+    "what to do about it."
 )
-
 query = st.session_state.query
+st.caption(query_summary(query))
 result = st.session_state.result
 explainable = result[result.iloc[:, 0].notna()]
 
@@ -176,11 +184,14 @@ for explanation in explain_all(row, sel, history, result):
         left, right = st.columns([1, 3])
         left.metric(explanation.title, explanation.value)
         with right:
-            st.markdown(_md(f"**What it means.** {explanation.meaning}"))
-            st.markdown(_md(f"**For your selection.** {explanation.for_you}"))
-            st.markdown(_md(f"**What to do with it.** {explanation.action}"))
+            # lead with this market's numbers and the action; the generic
+            # definition is one tap away instead of opening every card
+            st.markdown(_md(explanation.for_you))
+            st.markdown(_md(f"**What to do:** {explanation.action}"))
             if explanation.caveat:
                 st.caption(_md(f":material/warning: {explanation.caveat}"))
+            with st.expander("What this measures", icon=":material/info:"):
+                st.markdown(_md(explanation.meaning))
         if explanation.key == "trend_r2_adj":
             scale = st.segmented_control(
                 "Scale",
@@ -193,7 +204,7 @@ for explanation in explain_all(row, sel, history, result):
                 style_chart(_history_chart(history, scale == "Log scale")), width="stretch"
             )
             latest = history.iloc[-1]
-            latest_label = f"{latest['period_start']:%b %Y}–{latest['period_end']:%b %Y}"
+            latest_label = period_label(latest["period_start"], latest["period_end"])
             st.caption(
                 "**Each bar is a full 12-month block, not a single month**: the bar labelled "
                 f"{latest_label} is everything sold across those 12 months added up. Blocks "

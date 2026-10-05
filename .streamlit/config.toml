@@ -1,0 +1,5 @@
+# The app's charts and HTML table are styled for a light background; without
+# this, a phone in dark mode would get light-styled charts on a dark page.
+[theme]
+base = "light"
+primaryColor = "#2a78d6"

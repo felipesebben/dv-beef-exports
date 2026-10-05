@@ -13,25 +13,13 @@ import streamlit as st
 
 from dv_beef_exports.analysis.opportunity_scoring import (
     GEO_LEVELS,
-    PRODUCT_LEVELS,
     rank_markets,
     rank_products,
 )
 from dv_beef_exports.ingestion.duckdb_loader import DB_PATH, get_connection
 
-PRODUCT_LEVEL_LABELS = {
-    "ncm_code": "Specific product (NCM code)",
-    "category": "Product category",
-    "overall": "All beef (overall)",
-}
-GEO_LEVEL_LABELS = {
-    "country": "Country",
-    "region": "Region",
-    "trade_bloc": "Trade bloc",
-    "overall": "All markets (overall)",
-}
 RANKED_COL_LABELS = {
-    "ncm_code": "NCM code",
+    "ncm_code": "Product",
     "category": "Category",
     "country": "Country",
     "region": "Region",
@@ -45,29 +33,31 @@ RANKED_NOUNS = {
     "region": "region",
     "trade_bloc": "trade bloc",
 }
+# Business-language names, matching the Explain page's card titles - no
+# "adj. R²" or "FOB" in the table a business reader sees first.
 COLUMN_LABELS = {
-    "years_active": "Years active",
-    "annual_growth_pct": "Growth %/yr",
-    "trend_r2_adj": "Trend fit (adj. R²)",
-    "coverage_score": "Coverage",
-    "volume_confidence": "Volume confidence",
-    "confidence": "Confidence %",
-    "share_pct": "Share %",
-    "opportunity_score": "Opportunity score",
-    "total_fob_usd": "Total FOB (USD)",
-    "total_metric_ton": "Total tons",
-    "unit_price_usd_per_ton": "USD / ton",
+    "years_active": "Years with sales",
+    "annual_growth_pct": "Growth / yr",
+    "trend_r2_adj": "Trend steadiness",
+    "coverage_score": "History",
+    "volume_confidence": "Size vs. typical",
+    "confidence": "Confidence",
+    "share_pct": "Share",
+    "opportunity_score": "Score",
+    "total_fob_usd": "Value",
+    "total_metric_ton": "Tons",
+    "unit_price_usd_per_ton": "Avg. price ($/t)",
 }
 # percent columns are scaled x100 before display, hence "%%" formats
 COLUMN_FORMATS = {
     "years_active": "%d",
-    "annual_growth_pct": "%.1f%%",
+    "annual_growth_pct": "%+.0f%%",
     "trend_r2_adj": "%.2f",
     "coverage_score": "%.2f",
     "volume_confidence": "%.2f",
     "confidence": "%.0f%%",
     "share_pct": "%.1f%%",
-    "opportunity_score": "%.3f",
+    "opportunity_score": "%.2f",
     "total_fob_usd": "$%,.0f",
     "total_metric_ton": "%,.0f",
     "unit_price_usd_per_ton": "$%,.0f",
@@ -95,6 +85,35 @@ CATEGORY_PHRASES = {
     "salted_dried": "salted and dried beef",
     "processed": "processed beef",
 }
+
+
+# One shared period label for every chart axis - short enough for a phone,
+# while still naming both ends so a bar never reads as a single month.
+def period_label(start: pd.Timestamp, end: pd.Timestamp) -> str:
+    """Sep '25–Aug '26"""
+    return f"{start:%b '%y}–{end:%b '%y}"
+
+
+def capitalize(text: str) -> str:
+    return text[:1].upper() + text[1:]
+
+
+def display_name(level: str, value: str | None) -> str:
+    """How a ranked item is shown in charts and tables: products by name
+    ("Frozen livers"), never by NCM code; geographies as they are."""
+    if level == "ncm_code":
+        return capitalize(PRODUCT_PHRASES.get(value, value))
+    if level == "category":
+        return capitalize(CATEGORY_PHRASES.get(value, value))
+    return value if value is not None else NO_BLOC_LABEL
+
+
+# Compact axis labels: "$20B", "3M t" instead of "20,000,000,000". d3's SI
+# format says G for billions; business readers expect B.
+MONEY_AXIS_LABELS = "replace(format(datum.value, '$~s'), 'G', 'B')"
+TONS_AXIS_LABELS = "replace(format(datum.value, '~s'), 'G', 'B') + ' t'"
+
+
 # Chart chrome is deliberately recessive, so the ink goes to the data:
 # hairline gridlines on the value axis only, no ticks, muted axis text, and
 # axis titles anchored at the tip of the axis rather than its middle.
@@ -186,7 +205,7 @@ def product_label(con: duckdb.DuckDBPyConnection, level: str, value: str | None)
 def product_phrase(level: str, value: str | None) -> str:
     """A product as it reads mid-sentence, e.g. "frozen livers"."""
     if level == "overall":
-        return "beef (all tracked products)"
+        return "beef"
     if level == "ncm_code":
         return PRODUCT_PHRASES[value]
     return CATEGORY_PHRASES[value]
@@ -198,10 +217,15 @@ def product_scope_options(_con: duckdb.DuckDBPyConnection) -> list[tuple[str, st
     beef, then each category, then each NCM product."""
     options = [("overall", None, "All beef products")]
     options += [
-        ("category", value, f"Category: {CATEGORY_PHRASES[value]}")
+        ("category", value, f"All {CATEGORY_PHRASES[value]}")
         for value, _ in product_options(_con, "category")
     ]
-    options += [("ncm_code", code, label) for code, label in product_options(_con, "ncm_code")]
+    options += [
+        ("ncm_code", code, f"{display_name('ncm_code', code)} (NCM {code})")
+        for code, _ in sorted(
+            product_options(_con, "ncm_code"), key=lambda pair: PRODUCT_PHRASES[pair[0]]
+        )
+    ]
     return options
 
 
@@ -229,83 +253,113 @@ def _keep(name: str) -> dict:
     return {"key": f"query_{name}", "persist_state": "session"}
 
 
+_COMPARE_GEO = {"Countries": "country", "Regions": "region", "Trade blocs": "trade_bloc"}
+_COMPARE_PRODUCT = {"Products": "ncm_code", "Categories": "category"}
+_GOALS = ("Best markets", "Best products")
+
+
 def sidebar_controls(con: duckdb.DuckDBPyConnection) -> dict:
-    st.sidebar.header("Query")
-    lens = st.sidebar.radio("Lens", ["Product → Markets", "Country → Products"], **_keep("lens"))
+    """The ranking query, shared by the Opportunities and Explain pages.
 
-    window_years = st.sidebar.slider(
-        "Trailing window (years)", min_value=4, max_value=25, value=10, **_keep("window_years")
+    One searchable picker per side (the same options as the overview page)
+    instead of a level dropdown followed by a value dropdown, and plain
+    labels - the reader is a business user, not an analyst.
+    """
+    sb = st.sidebar
+    sb.header("What to rank")
+    goal = sb.segmented_control(
+        "Find the",
+        _GOALS,
+        default=_GOALS[0],
+        required=True,
+        width="stretch",
+        **_keep("goal"),
     )
-    min_years_active = st.sidebar.slider(
-        "Minimum active years",
-        min_value=4,
-        max_value=window_years,
-        value=4,
-        help="Adjusted R² is unstable below ~4 active years (ADR 0005 amendment).",
-        **_keep("min_years_active"),
-    )
 
-    if lens == "Product → Markets":
-        product_level = st.sidebar.selectbox(
-            "Fix product",
-            list(PRODUCT_LEVELS),
-            index=list(PRODUCT_LEVELS).index("overall"),
-            format_func=lambda lvl: PRODUCT_LEVEL_LABELS[lvl],
-            **_keep("markets_product_level"),
+    if goal == _GOALS[0]:
+        product_level, product_value, _ = sb.selectbox(
+            "For this product",
+            product_scope_options(con),
+            format_func=lambda option: option[2],
+            **_keep("product"),
         )
-        product_value = None
-        if product_level != "overall":
-            options = product_options(con, product_level)
-            product_value = st.sidebar.selectbox(
-                "Product",
-                options,
-                format_func=lambda pair: pair[1],
-                **_keep(f"markets_product_{product_level}"),
-            )[0]
-
-        geo_choices = [lvl for lvl in GEO_LEVELS if lvl != "overall"]
-        geo_level = st.sidebar.selectbox(
-            "Rank markets by",
-            geo_choices,
-            format_func=lambda lvl: GEO_LEVEL_LABELS[lvl],
-            **_keep("markets_geo_level"),
+        compare = sb.segmented_control(
+            "Compare",
+            list(_COMPARE_GEO),
+            default="Countries",
+            required=True,
+            width="stretch",
+            **_keep("compare_geo"),
         )
-        return {
+        query = {
             "mode": "markets",
             "product_level": product_level,
             "product_value": product_value,
+            "geo_level": _COMPARE_GEO[compare],
+        }
+    else:
+        geo_level, geo_value, _ = sb.selectbox(
+            "In this market",
+            market_scope_options(con),
+            format_func=lambda option: option[2],
+            **_keep("market"),
+        )
+        compare = sb.segmented_control(
+            "Compare",
+            list(_COMPARE_PRODUCT),
+            default="Products",
+            required=True,
+            width="stretch",
+            **_keep("compare_product"),
+        )
+        query = {
+            "mode": "products",
             "geo_level": geo_level,
-            "window_years": window_years,
-            "min_years_active": min_years_active,
+            "geo_value": geo_value,
+            "product_level": _COMPARE_PRODUCT[compare],
         }
 
-    geo_level = st.sidebar.selectbox(
-        "Fix market",
-        list(GEO_LEVELS),
-        index=list(GEO_LEVELS).index("overall"),
-        format_func=lambda lvl: GEO_LEVEL_LABELS[lvl],
-        **_keep("products_geo_level"),
-    )
-    geo_value = None
-    if geo_level != "overall":
-        options = geo_options(con, geo_level)
-        geo_value = st.sidebar.selectbox("Market", options, **_keep(f"products_geo_{geo_level}"))
+    with sb.expander("Advanced", icon=":material/tune:"):
+        window_years = st.slider(
+            "Years of history to use",
+            min_value=4,
+            max_value=25,
+            value=10,
+            help="How far back the growth trend looks. Longer is steadier; shorter reacts "
+            "faster to recent change.",
+            **_keep("window_years"),
+        )
+        min_years_active = st.slider(
+            "Minimum years with sales",
+            min_value=4,
+            max_value=window_years,
+            value=4,
+            help="Leave out anything that sold in fewer years than this - too little "
+            "history to call it a trend.",
+            **_keep("min_years_active"),
+        )
+    return {**query, "window_years": window_years, "min_years_active": min_years_active}
 
-    product_choices = [lvl for lvl in PRODUCT_LEVELS if lvl != "overall"]
-    product_level = st.sidebar.selectbox(
-        "Rank products by",
-        product_choices,
-        format_func=lambda lvl: PRODUCT_LEVEL_LABELS[lvl],
-        **_keep("products_product_level"),
+
+def query_summary(query: dict) -> str:
+    """The current ranking query in one line, for the top of each page - on a
+    phone the sidebar is hidden behind the menu."""
+    if query["mode"] == "markets":
+        ranked = {"country": "countries", "region": "regions", "trade_bloc": "trade blocs"}
+        subject = (
+            f"Best **{ranked[query['geo_level']]}** for "
+            f"**{product_phrase(query['product_level'], query['product_value'])}**"
+        )
+    else:
+        ranked = {"ncm_code": "products", "category": "product categories"}
+        subject = (
+            f"Best **{ranked[query['product_level']]}** in "
+            f"**{geo_label(query['geo_level'], query['geo_value'])}**"
+        )
+    return (
+        f":material/tune: {subject} · {query['window_years']} years of history · "
+        "change it in the sidebar (☰ on a phone)"
     )
-    return {
-        "mode": "products",
-        "geo_level": geo_level,
-        "geo_value": geo_value,
-        "product_level": product_level,
-        "window_years": window_years,
-        "min_years_active": min_years_active,
-    }
 
 
 def run_query(con: duckdb.DuckDBPyConnection, params: dict) -> pd.DataFrame:
