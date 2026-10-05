@@ -146,6 +146,16 @@ def style_chart(chart: alt.TopLevelMixin) -> alt.TopLevelMixin:
         .configure_axisBand(grid=False)
         .configure_view(strokeWidth=0)
         .configure_legend(labelColor=CHART_INK, titleColor=CHART_INK, labelFontSize=11)
+        # every chart is titled: the title names it, the subtitle says how to read it
+        .configure_title(
+            anchor="start",
+            color="#0b0b0b",
+            fontSize=13,
+            fontWeight=600,
+            subtitleColor=CHART_MUTED,
+            subtitleFontSize=11,
+            offset=10,
+        )
     )
 
 

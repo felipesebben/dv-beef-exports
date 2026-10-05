@@ -63,7 +63,14 @@ def _opportunity_chart(result: pd.DataFrame, ranked_label: str) -> alt.LayerChar
     labels = base.mark_text(align="left", dx=4, color=CHART_INK).encode(
         text=alt.Text("opportunity_score:Q", format=".2f")
     )
-    return (bars + labels).properties(height=alt.Step(24))
+    return (bars + labels).properties(
+        title=alt.TitleParams(
+            text="Top 15 by opportunity score",
+            subtitle="Fast growth with plenty of room left ranks highest",
+            anchor="start",
+        ),
+        height=alt.Step(24),
+    )
 
 
 def _column_config(ranked_label: str) -> dict:
@@ -129,7 +136,6 @@ ranked_col = result.columns[0]
 ranked_label = RANKED_COL_LABELS.get(ranked_col, ranked_col)
 result = result.assign(name=[display_name(ranked_col, v) for v in result[ranked_col]])
 
-st.subheader("Top 15")
 st.altair_chart(style_chart(_opportunity_chart(result, ranked_label)), width="stretch")
 st.page_link(
     "app_pages/explain.py",

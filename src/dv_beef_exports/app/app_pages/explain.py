@@ -1,7 +1,8 @@
 """
 Explain-the-numbers page: every metric for one result of the sidebar's
 query, in plain business language, using that result's real numbers - see
-app/explanations.py for the wording.
+app/explanations.py for the wording and app/explain_charts.py for the two
+charts under each metric (its context, and how it compares).
 """
 
 from __future__ import annotations
@@ -10,83 +11,31 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
+from dv_beef_exports.analysis.market_overview import market_trend
 from dv_beef_exports.analysis.opportunity_scoring import period_history
+from dv_beef_exports.app import explain_charts as charts
 from dv_beef_exports.app.common import (
-    MONEY_AXIS_LABELS,
     RANKED_NOUNS,
     connection,
+    display_name,
     geo_label,
-    period_label,
-    product_label,
     product_phrase,
     query_summary,
     style_chart,
 )
-from dv_beef_exports.app.explanations import Selection, bottom_line, explain_all
-
-_COUNTED = "Actual sales (counted)"
-_LEFT_OUT = "Actual sales (none, or too small to count)"
-_TREND = "Steady-growth trend"
+from dv_beef_exports.app.explanations import (
+    Selection,
+    bottom_line,
+    explain_all,
+    implied_typical_size,
+    plural,
+)
 
 
 def _md(text: str) -> str:
     """Escape $ for st.markdown, which renders text between two $ signs as a
     LaTeX formula - "$309k and 182 t - about $38.6k" would come out garbled."""
     return text.replace("$", "\\$")
-
-
-def _history_chart(history: pd.DataFrame, log_scale: bool) -> alt.LayerChart:
-    data = history.assign(
-        status=history["in_fit"].map({True: _COUNTED, False: _LEFT_OUT}),
-        trend=history["trend_fob_usd"].where(history["in_fit"]),
-        # spell out the whole 12-month block, so no bar reads as a single month
-        period=[
-            period_label(start, end)
-            for start, end in zip(history["period_start"], history["period_end"], strict=True)
-        ],
-    )
-    if log_scale:
-        data = data[data["fob_usd"] > 0]
-    y_scale = alt.Scale(type="log") if log_scale else alt.Scale()
-    # one shared colour scale, so bars and the trend line share a legend
-    colors = alt.Scale(
-        domain=[_COUNTED, _LEFT_OUT, _TREND], range=["#2a78d6", "#c3c2b7", "#e07b39"]
-    )
-    legend = alt.Legend(title=None, orient="top")
-    base = alt.Chart(data).encode(
-        x=alt.X(
-            "period:N",
-            sort=None,  # keep chronological (data) order, not alphabetical
-            title="Each bar = the total for one 12-month period",
-            axis=alt.Axis(labelAngle=-40),
-        ),
-    )
-    tooltip = [
-        alt.Tooltip("period:N", title="Period"),
-        alt.Tooltip("fob_usd:Q", title="Total sold in these 12 months (USD)", format="$,.0f"),
-        alt.Tooltip("trend:Q", title="Trend for these 12 months (USD)", format="$,.0f"),
-        alt.Tooltip("metric_ton:Q", title="Total tons in these 12 months", format=",.1f"),
-    ]
-    bars = base.mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
-        y=alt.Y(
-            "fob_usd:Q",
-            title="Total sold in the 12-month period",
-            scale=y_scale,
-            axis=alt.Axis(labelExpr=MONEY_AXIS_LABELS),
-        ),
-        color=alt.Color("status:N", scale=colors, legend=legend),
-        tooltip=tooltip,
-    )
-    trend = (
-        base.mark_line(strokeWidth=3, point=alt.OverlayMarkDef(filled=True, size=60))
-        .encode(
-            y=alt.Y("trend:Q", scale=y_scale),
-            color=alt.Color("legend_label:N", scale=colors, legend=legend),
-            tooltip=tooltip,
-        )
-        .transform_calculate(legend_label=f"'{_TREND}'")
-    )
-    return (bars + trend).properties(height=340)
 
 
 def _selection_for(row: pd.Series, rank: int, n_ranked: int, query: dict, window: str) -> Selection:
@@ -132,10 +81,77 @@ def _history_for(subject: str, query: dict) -> pd.DataFrame:
     )
 
 
+def _scope_totals(query: dict) -> pd.DataFrame:
+    """The fixed side's total per period - what the share is a share OF."""
+    if query["mode"] == "markets":
+        scope = {"product_level": query["product_level"], "product_value": query["product_value"]}
+    else:
+        scope = {"geo_level": query["geo_level"], "geo_value": query["geo_value"]}
+    return market_trend(connection(), window_years=query["window_years"], **scope)
+
+
+def _share_title(sel: Selection) -> tuple[str, str]:
+    """(title, subtitle) - the name goes in the subtitle, which can wrap less
+    badly than a title on a phone."""
+    if sel.mode == "markets":
+        return f"Share of Brazil's {sel.product} exports", f"Going to {sel.market}, per period"
+    return f"Share of all Brazil sells to {sel.market}", f"Taken by {sel.product}, per period"
+
+
+def _charts_for(key: str, ctx: dict) -> tuple[alt.TopLevelMixin | None, alt.TopLevelMixin]:
+    """(context chart, comparison chart) for one metric card."""
+    peers, subject, nouns = ctx["peers"], ctx["subject"], ctx["nouns"]
+
+    def compare(column: str, metric: str, fmt, reference=None):
+        return charts.comparison_chart(peers, subject, column, metric, fmt, nouns, reference)
+
+    history, row = ctx["history"], ctx["row"]
+    if key == "annual_growth_pct":
+        return charts.growth_context(history), compare(
+            "annual_growth_pct", "Growth per year", charts.fmt_growth
+        )
+    if key == "trend_r2_adj":
+        return charts.trend_context(history, ctx["log_scale"]), compare(
+            "trend_r2_adj", "Trend steadiness", charts.fmt_two
+        )
+    if key == "share_pct":
+        return charts.share_context(history, ctx["scope_totals"], ctx["share_title"]), compare(
+            "share_pct", "Share", charts.fmt_share
+        )
+    if key == "opportunity_score":
+        return charts.score_context(peers, subject, nouns), compare(
+            "opportunity_score", "Opportunity score", charts.fmt_two
+        )
+    if key == "coverage_score":
+        return charts.coverage_context(history), compare(
+            "years_active", "Years with sales", charts.fmt_years
+        )
+    if key == "volume_confidence":
+        typical = implied_typical_size(row["total_fob_usd"], row["volume_confidence"])
+        return charts.volume_context(subject, row["total_fob_usd"], typical), compare(
+            "volume_confidence", "Size vs. typical", charts.fmt_two, reference=("typical", 0.5)
+        )
+    if key == "confidence":
+        return charts.confidence_context(row), compare("confidence", "Confidence", charts.fmt_pct)
+    if key == "total_fob_usd":
+        return charts.size_context(history), compare(
+            "total_fob_usd", "Total value in the window", charts.money
+        )
+    if key == "unit_price_usd_per_ton":
+        median = peers["unit_price_usd_per_ton"].median()
+        return charts.price_context(history, median, nouns), compare(
+            "unit_price_usd_per_ton",
+            "Average price",
+            charts.fmt_price,
+            reference=("median", median),
+        )
+    raise ValueError(f"no charts for {key!r}")
+
+
 st.title("Explain the numbers")
 st.caption(
-    "Every number behind one result, in plain language: what it says for this market and "
-    "what to do about it."
+    "Every number behind one result, in plain language: what it says for this market, what "
+    "to do about it, and how it compares with the rest."
 )
 query = st.session_state.query
 st.caption(query_summary(query))
@@ -144,25 +160,18 @@ explainable = result[result.iloc[:, 0].notna()]
 
 if explainable.empty:
     st.info(
-        "Nothing to explain for this selection - no result cleared the minimum active-years "
-        "threshold. Try a wider window or a broader product in the sidebar."
+        "Nothing to explain for this selection - nothing sold in enough years. Try a broader "
+        "product or market, or more years of history under **Advanced** in the sidebar.",
+        icon=":material/search_off:",
     )
     st.stop()
 
+ranked_col = result.columns[0]
 ranks = {value: i + 1 for i, value in enumerate(result.iloc[:, 0])}
-con = connection()
-subject_labels = {
-    value: (
-        geo_label(query["geo_level"], value)
-        if query["mode"] == "markets"
-        else product_label(con, query["product_level"], value)
-    )
-    for value in explainable.iloc[:, 0]
-}
-subject = st.selectbox(
+subject_value = st.selectbox(
     "Explain the numbers for",
-    list(subject_labels),
-    format_func=lambda v: f"#{ranks[v]}  {subject_labels[v]}",
+    list(explainable.iloc[:, 0]),
+    format_func=lambda v: f"#{ranks[v]}  {display_name(ranked_col, v)}",
 )
 if len(explainable) < len(result):
     st.caption(
@@ -170,10 +179,21 @@ if len(explainable) < len(result):
         "can't be explained as one market."
     )
 
-row = result[result.iloc[:, 0] == subject].iloc[0]
-history = _history_for(subject, query)
+row = result[result.iloc[:, 0] == subject_value].iloc[0]
+history = _history_for(subject_value, query)
 window = f"{history['period_start'].iloc[0]:%b %Y} - {history['period_end'].iloc[-1]:%b %Y}"
-sel = _selection_for(row, ranks[subject], len(result), query, window)
+sel = _selection_for(row, ranks[subject_value], len(result), query, window)
+subject_name = display_name(ranked_col, subject_value)
+context = {
+    "row": row,
+    "history": history,
+    "subject": subject_name,
+    "peers": result.assign(name=[display_name(ranked_col, v) for v in result[ranked_col]]),
+    "nouns": plural(sel.ranked_noun),
+    "scope_totals": _scope_totals(query),
+    "share_title": _share_title(sel),
+    "log_scale": False,
+}
 
 with st.container(border=True):
     st.subheader(":material/flag: Bottom line")
@@ -192,25 +212,25 @@ for explanation in explain_all(row, sel, history, result):
                 st.caption(_md(f":material/warning: {explanation.caveat}"))
             with st.expander("What this measures", icon=":material/info:"):
                 st.markdown(_md(explanation.meaning))
+
         if explanation.key == "trend_r2_adj":
-            scale = st.segmented_control(
-                "Scale",
-                ["Actual values", "Log scale"],
-                default="Actual values",
-                key="explain_history_scale",
-                help="Log scale makes small early years visible: each step up is 10x.",
+            context["log_scale"] = (
+                st.segmented_control(
+                    "Scale",
+                    ["Actual values", "Log scale"],
+                    default="Actual values",
+                    required=True,
+                    key="explain_history_scale",
+                    help="Log scale makes small early years visible: each step up is 10x.",
+                )
+                == "Log scale"
             )
-            st.altair_chart(
-                style_chart(_history_chart(history, scale == "Log scale")), width="stretch"
-            )
-            latest = history.iloc[-1]
-            latest_label = period_label(latest["period_start"], latest["period_end"])
-            st.caption(
-                "**Each bar is a full 12-month block, not a single month**: the bar labelled "
-                f"{latest_label} is everything sold across those 12 months added up. Blocks "
-                "don't overlap - one bar per year, with years ending at the latest month in the "
-                "data so a half-finished calendar year never looks like a drop. The orange line "
-                "is the steady-growth trend the growth rate comes from. Where a bar falls short "
-                "of its dot, that year sold less than the trend; where it overshoots, more. The "
-                "smaller those gaps overall, the higher the steadiness score."
-            )
+        context_chart, comparison = _charts_for(explanation.key, context)
+        chart_left, chart_right = st.columns(2, gap="large")
+        with chart_left:
+            if context_chart is None:
+                st.caption("Not enough history to chart this.")
+            else:
+                st.altair_chart(style_chart(context_chart), width="stretch")
+        with chart_right:
+            st.altair_chart(style_chart(comparison), width="stretch")

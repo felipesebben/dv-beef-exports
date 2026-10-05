@@ -231,3 +231,22 @@ something worth remembering (see `docs/WORKFLOW.md`).
   definition sits behind "What this measures".
 - Light theme forced (`.streamlit/config.toml`) - the styling assumes it.
 
+## 2026-10-05 — Explain page charts
+- Every metric card on "Explain the numbers" now has two titled charts
+  (`app/explain_charts.py`), side by side on desktop, stacked on a phone:
+  - **context** - the metric over time or what it's made of: change vs.
+    the previous 12 months, actual vs. the steady-growth line, share per
+    period, growth-vs-share scatter, which years had sales, size vs. a
+    typical pair, the three pieces of evidence (weakest emphasised), value
+    and tons, price vs. the peer median;
+  - **comparison** - the metric across the top 10 of the ranked set, the
+    selected result in blue and the rest grey (emphasis, not a rainbow),
+    appended with its rank when it's outside the top 10.
+- Dataviz rules applied: every chart titled (subtitle says how to read
+  it), no dual axes (value and tons are two stacked charts), legends only
+  for multi-series charts and with short labels, selective direct labels.
+  Titles added to the overview and Opportunities charts too.
+- Checked in phone and desktop screenshots; fixed what they showed - a
+  truncated legend, "0%, 0%, 0%" axes on tiny shares, overlapping labels
+  on short bar charts, truncated subtitles and titles on a phone.
+

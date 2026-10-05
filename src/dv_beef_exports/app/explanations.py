@@ -336,7 +336,7 @@ def explain_coverage(row: pd.Series, sel: Selection) -> MetricExplanation:
         action=action,
         caveat=(
             "Very small first years can be left out of the count, as noise - they "
-            "show as greyed-out bars on the chart."
+            'show as light cells marked "Too small to count" on the chart.'
         ),
     )
 
