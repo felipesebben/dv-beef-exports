@@ -187,7 +187,15 @@ def _trend_chart(trend: pd.DataFrame, measure: str) -> alt.LayerChart:
         .encode(text="label:N")
         .transform_filter(alt.datum.label != "")
     )
-    return (bars + labels).properties(height=420)
+    noun = _MEASURE_NOUNS[measure]
+    return (bars + labels).properties(
+        title=alt.TitleParams(
+            text=f"{noun[:1].upper()}{noun[1:]}, each 12-month period",
+            subtitle="Highest and lowest periods labelled",
+            anchor="start",
+        ),
+        height=420,
+    )
 
 
 def _short_tons(t: float) -> str:
