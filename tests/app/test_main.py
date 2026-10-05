@@ -129,8 +129,8 @@ def test_explain_page_renders_bottom_line_and_every_metric() -> None:
 
     assert not at.exception
     assert at.title[0].value == "Explain the numbers"
-    # 9 metric cards, each with an st.metric
-    assert len(at.metric) == 9
+    # every metric card has an st.metric
+    assert len(at.metric) == 10  # one card per metric, incl. recent momentum
     assert any("Bottom line" in s.value for s in at.subheader)
 
 
@@ -138,9 +138,9 @@ def test_explain_page_uses_the_shared_sidebar_selection() -> None:
     at = _explain_page(_rank_markets_for(_app(), LIVERS))
 
     assert not at.exception
-    # the default subject is the #1 market for frozen livers
-    assert at.main.selectbox[0].value == "Singapore"
-    assert any("frozen livers to Singapore" in m.value for m in at.markdown)
+    # the default subject is the #1 market for frozen livers (Libya, by the index)
+    assert at.main.selectbox[0].value == "Libya"
+    assert any("frozen livers to Libya" in m.value for m in at.markdown)
 
 
 def test_explain_page_escapes_every_dollar_sign() -> None:

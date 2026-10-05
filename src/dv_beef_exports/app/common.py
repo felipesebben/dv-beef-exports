@@ -43,7 +43,13 @@ COLUMN_LABELS = {
     "volume_confidence": "Size vs. typical",
     "confidence": "Confidence",
     "share_pct": "Share",
-    "opportunity_score": "Score",
+    "recent_growth_pct": "Recent growth / yr",
+    "recent_consistency": "Recent years up",
+    "price_trend_pct": "Price trend / yr",
+    "tons_per_year": "Tons / yr",
+    "materiality": "Materiality",
+    "attractiveness": "Attractiveness",
+    "opportunity_score": "Opportunity index",
     "total_fob_usd": "Value",
     "total_metric_ton": "Tons",
     "unit_price_usd_per_ton": "Avg. price ($/t)",
@@ -57,12 +63,25 @@ COLUMN_FORMATS = {
     "volume_confidence": "%.2f",
     "confidence": "%.0f%%",
     "share_pct": "%.1f%%",
-    "opportunity_score": "%.2f",
+    "recent_growth_pct": "%+.0f%%",
+    "recent_consistency": "%.0f%%",
+    "price_trend_pct": "%+.0f%%",
+    "tons_per_year": "%,.0f",
+    "materiality": "%.2f",
+    "attractiveness": "%.2f",
+    "opportunity_score": "%.0f",
     "total_fob_usd": "$%,.0f",
     "total_metric_ton": "%,.0f",
     "unit_price_usd_per_ton": "$%,.0f",
 }
-PERCENT_COLUMNS = ("annual_growth_pct", "share_pct", "confidence")
+PERCENT_COLUMNS = (
+    "annual_growth_pct",
+    "share_pct",
+    "confidence",
+    "recent_growth_pct",
+    "recent_consistency",
+    "price_trend_pct",
+)
 # How each product reads mid-sentence ("Brazil's exports of frozen livers
 # to Singapore") - ComexStat's list-style descriptions ("Livers, frozen")
 # don't, and no single reordering rule fixes all 11.

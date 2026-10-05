@@ -28,6 +28,7 @@ from dv_beef_exports.app.explanations import (
     bottom_line,
     explain_all,
     implied_typical_size,
+    index_factors,
     plural,
 )
 
@@ -118,9 +119,13 @@ def _charts_for(key: str, ctx: dict) -> tuple[alt.TopLevelMixin | None, alt.TopL
         return charts.share_context(history, ctx["scope_totals"], ctx["share_title"]), compare(
             "share_pct", "Share", charts.fmt_share
         )
+    if key == "recent_growth_pct":
+        return charts.recent_context(history), compare(
+            "recent_growth_pct", "Recent growth per year", charts.fmt_growth
+        )
     if key == "opportunity_score":
-        return charts.score_context(peers, subject, nouns), compare(
-            "opportunity_score", "Opportunity score", charts.fmt_two
+        return charts.index_breakdown(index_factors(row)), compare(
+            "opportunity_score", "Opportunity index", charts.fmt_index
         )
     if key == "coverage_score":
         return charts.coverage_context(history), compare(
@@ -135,15 +140,15 @@ def _charts_for(key: str, ctx: dict) -> tuple[alt.TopLevelMixin | None, alt.TopL
         return charts.confidence_context(row), compare("confidence", "Confidence", charts.fmt_pct)
     if key == "total_fob_usd":
         return charts.size_context(history), compare(
-            "total_fob_usd", "Total value in the window", charts.money
+            "tons_per_year",
+            "Tons a year",
+            charts.fmt_tons,
+            reference=("one container", 25.0),
         )
     if key == "unit_price_usd_per_ton":
         median = peers["unit_price_usd_per_ton"].median()
         return charts.price_context(history, median, nouns), compare(
-            "unit_price_usd_per_ton",
-            "Average price",
-            charts.fmt_price,
-            reference=("median", median),
+            "price_trend_pct", "Price trend per year", charts.fmt_growth
         )
     raise ValueError(f"no charts for {key!r}")
 

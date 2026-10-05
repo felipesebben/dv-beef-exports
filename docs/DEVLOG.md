@@ -250,3 +250,22 @@ something worth remembering (see `docs/WORKFLOW.md`).
   truncated legend, "0%, 0%, 0%" axes on tiny shares, overlapping labels
   on short bar charts, truncated subtitles and titles on a phone.
 
+
+## 2026-10-05 — Opportunity index (ADR 0006)
+- `opportunity_score` is now a 0-100 index, replacing ADR 0005's
+  growth × (1 − share): `100 × attractiveness × headroom × materiality ×
+  evidence`. Attractiveness ranks long-run growth (30%), recent momentum
+  (30%: growth + consistency over the last 4 periods), size (20%) and
+  price trend (20%) within the ranked set; headroom (1 − share) and
+  materiality (tons a year against one 25-ton reefer container) multiply
+  it; confidence now affects the rank.
+- Why: the old score was effectively the growth rate - Vanuatu ranked #5
+  on $14k a year, confidence never moved a rank, the US sat at #39. Now:
+  Mexico and the Philippines lead; Vanuatu, Bulgaria and Palau fall to
+  #150-158; Guyana's 26.8 t of frozen livers in 10 years drops #2 → #13;
+  saturated markets (China, Egypt) are discounted. Robust: top 10 holds
+  8-10/10 across weight and anchor variants.
+- App: the index and its components in the Opportunities table; a new
+  "Recent momentum" card; the index card breaks into its four factors and
+  names the weakest only when it's actually weak; size speaks in
+  containers; price covers level and trend.
