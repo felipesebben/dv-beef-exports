@@ -290,3 +290,25 @@ something worth remembering (see `docs/WORKFLOW.md`).
   "Recent momentum" card; the index card breaks into its four factors and
   names the weakest only when it's actually weak; size speaks in
   containers; price covers level and trend.
+
+## 2026-10-06 — Selection-relative index, live-app fix (#36)
+- "The app broke": after #34 merged, the live Explain page raised
+  `ImportError: cannot import name 'index_factors'`. The code was fine -
+  Community Cloud re-reads pages on a deploy but keeps already-imported
+  modules cached, so the page saw the old `explanations.py`. Fixed with
+  ⋮ → **Reboot app**; `docs/DEPLOY.md` now says to do that whenever a
+  page shows an ImportError after a deploy.
+- Index scores are now fully selection-relative, as asked ("must not be
+  global"): `K`, the typical size behind volume confidence, was the
+  median over the whole product × country grid; it's now the median of
+  the groups in the current selection (ADR 0006 amendment). A test checks
+  that trade outside the selection can't change a ranking. Effect is
+  small: frozen livers' `K` drops from $52,119 to $10,228, Libya stays #1
+  (60.92), Singapore #7, Guyana #13; the all-beef view is unchanged. The
+  Explain page now says "a typical country/product in this selection".
+- Each Streamlit thread gets its own DuckDB cursor onto one shared
+  database - one connection running queries from two sessions at once
+  could fail under concurrent users.
+- Full review sweep: every sidebar query through the ranking, the Explain
+  wording and every chart - 532 queries, 687 Explain pages, 14,427
+  charts, 0 failures.
