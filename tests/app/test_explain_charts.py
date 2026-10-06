@@ -62,7 +62,7 @@ def _all_charts() -> dict:
             {"attractiveness": 0.7, "room to grow": 0.99, "commercial size": 0.5, "evidence": 0.9}
         ),
         "coverage": charts.coverage_context(HISTORY),
-        "volume": charts.volume_context("Target", 10_300_000, 7_000_000),
+        "volume": charts.volume_context("Target", 10_300_000, 7_000_000, "countries"),
         "confidence": charts.confidence_context(ROW),
         "size": charts.size_context(HISTORY),
         "price": charts.price_context(HISTORY, 4_015, "countries"),

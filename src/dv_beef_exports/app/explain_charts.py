@@ -337,11 +337,12 @@ def coverage_context(history: pd.DataFrame) -> alt.Chart:
     )
 
 
-def volume_context(subject: str, total: float, typical: float) -> alt.LayerChart:
-    """The selected result's total next to a typical product-market pair."""
+def volume_context(subject: str, total: float, typical: float, nouns: str) -> alt.LayerChart:
+    """The selected result's total next to the median of the ranked set (K)."""
+    noun = nouns[:-3] + "y" if nouns.endswith("ies") else nouns[:-1]
     data = pd.DataFrame(
         {
-            "who": [subject, "Typical pair"],
+            "who": [subject, f"Typical {noun}"],
             "total": [total, typical],
             "is_subject": [True, False],
             "label": [money(total), money(typical)],
@@ -363,8 +364,8 @@ def volume_context(subject: str, total: float, typical: float) -> alt.LayerChart
     labels = base.mark_text(align="left", dx=4, color=CHART_INK).encode(x="total:Q", text="label:N")
     return (bars + labels).properties(
         title=_title(
-            "Total sales vs. a typical pair",
-            "Typical = the median product-market pair over the same years",
+            f"Total sales vs. a typical {noun}",
+            f"Typical = the median of all {nouns} with sales over the same years",
         ),
         height=alt.Step(30),
     )

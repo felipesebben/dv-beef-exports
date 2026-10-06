@@ -450,35 +450,58 @@ def test_unit_price_is_sum_then_divide_not_row_average(con: duckdb.DuckDBPyConne
     assert result.loc["Wobbleland", "unit_price_usd_per_ton"] == pytest.approx(expected_unit_price)
 
 
-def test_volume_confidence_uses_full_grid_not_just_fixed_product(
-    con: duckdb.DuckDBPyConnection,
-) -> None:
-    """K (the volume-confidence shrinkage constant) is the median group
-    total across the FULL (product, geo) grid - adding a large, unrelated
-    product/country pair should shift a group's volume_confidence even
-    though that pair never appears in this query's own filtered results.
-    """
-    target_rows = _exp_series(
-        2020, 4, final_value=1000, rate=0.1, ncm_code=PRODUCT_A, country="Wineland"
+def test_scores_depend_only_on_the_selection(con: duckdb.DuckDBPyConnection) -> None:
+    """Every input to a group's index is computed within the selection -
+    including K, the typical size behind volume_confidence. Trade in a
+    different product must not move this product's scores at all."""
+    _insert(
+        con,
+        _exp_series(2020, 4, final_value=1000, rate=0.1, ncm_code=PRODUCT_A, country="Wineland")
+        + _exp_series(2020, 4, final_value=3000, rate=0.2, ncm_code=PRODUCT_A, country="Oilland"),
     )
-    _insert(con, target_rows)
 
-    result_before = rank_markets(
+    def scores():
+        return rank_markets(
+            con, product_level="ncm_code", product_value=PRODUCT_A, geo_level="country"
+        ).set_index("country")
+
+    before = scores()
+    _insert(
+        con,
+        _exp_series(2020, 4, final_value=5e7, rate=0.1, ncm_code=PRODUCT_B, country="Bigland")
+        + _exp_series(2020, 4, final_value=5e7, rate=0.1, ncm_code=PRODUCT_B, country="Wineland"),
+    )
+    after = scores()
+
+    pd.testing.assert_frame_equal(before, after)
+
+
+def test_typical_size_is_the_median_of_the_selection(con: duckdb.DuckDBPyConnection) -> None:
+    """K = the median total of the groups being compared: a peer added
+    WITHIN the selection does move it."""
+    _insert(
+        con,
+        _exp_series(2020, 4, final_value=1000, rate=0.1, ncm_code=PRODUCT_A, country="Wineland")
+        + _exp_series(2020, 4, final_value=5e7, rate=0.1, ncm_code=PRODUCT_A, country="Bigland"),
+    )
+    two = rank_markets(
         con, product_level="ncm_code", product_value=PRODUCT_A, geo_level="country"
-    )
-    volume_confidence_before = result_before.loc[0, "volume_confidence"]
+    ).set_index("country")
+    # with two groups, K is their mean (the median of two values), so the
+    # smaller one sits well below 0.5
+    small, big = two.loc["Wineland", "volume_confidence"], two.loc["Bigland", "volume_confidence"]
+    assert small < 0.5 < big
 
-    huge_rows = _exp_series(
-        2020, 4, final_value=50_000_000, rate=0.1, ncm_code=PRODUCT_B, country="Bigland"
+    _insert(
+        con,
+        _exp_series(2020, 4, final_value=1e8, rate=0.1, ncm_code=PRODUCT_A, country="Hugeland"),
     )
-    _insert(con, huge_rows)
-
-    result_after = rank_markets(
+    three = rank_markets(
         con, product_level="ncm_code", product_value=PRODUCT_A, geo_level="country"
-    )
-    volume_confidence_after = result_after.loc[0, "volume_confidence"]
+    ).set_index("country")
 
-    assert volume_confidence_after < volume_confidence_before
+    # Bigland is now the median group, so it reads exactly "typical"
+    assert three.loc["Bigland", "volume_confidence"] == pytest.approx(0.5)
 
 
 def _yearly(start_year: int, values: list[float], **fields: Any) -> list[dict[str, Any]]:

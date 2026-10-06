@@ -96,6 +96,22 @@ and names the weakest.
   Turkey's suspect transit flows, docs/ROADMAP.md backlog) still apply.
 - The working reference is `docs/analysis-methodology.md`.
 
+## Amendment (2026-10-06): every input is computed within the selection
+The index's factors were already selection-relative (percentiles within the
+ranked set; share of the fixed axis) with one exception: `K`, the "typical
+size" behind `volume_confidence`, was ADR 0005's median over the *whole*
+product × geography grid. So a market's confidence - and through the
+evidence factor, its index - moved with trade that had nothing to do with
+the selection, and "Size vs. a typical market" compared, say, a frozen-tongue
+market against a typical pair from all of beef.
+
+`K` is now the median total of the groups **being compared**: every value
+of the ranked axis that sold anything in the window under the selection's
+fixed filter (before the `min_years_active` cut). Nothing outside the
+selection affects any score - a test inserts unrelated trade and asserts
+the ranking is unchanged. The one deliberate exception is materiality's
+25-ton anchor, which is absolute by design (a container is a container).
+
 ## Status
-Accepted, 2026-10-05. Supersedes ADR 0005's score formula; 0005's
+Accepted, 2026-10-05; amended 2026-10-06 (selection-relative K, above). Supersedes ADR 0005's score formula; 0005's
 confidence definition stands and now feeds the index's evidence factor.

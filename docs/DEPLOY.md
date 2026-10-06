@@ -36,6 +36,18 @@ Worth knowing (Community Cloud docs, checked 2026-10-03):
   so the viewer list controls who can *use* the app, not who can see the
   numbers.
 
+## After a deploy: if a page shows an ImportError, reboot
+
+Community Cloud picks up a merge to `main` without restarting the Python
+process. Page files are re-read on every run, but modules they import
+(`app/explanations.py`, `app/common.py`, …) can stay cached from before -
+so a page that uses something new in a module fails with
+`ImportError: cannot import name …` even though the code on `main` is
+correct. Seen 2026-10-06 after the opportunity-index merge (#34).
+
+Fix: on share.streamlit.io, open the app's ⋮ menu → **Reboot app**. Do it
+after any merge that adds or renames functions in a shared module.
+
 ## Notes
 
 - **Cold starts:** Community Cloud puts apps to sleep after a period without
