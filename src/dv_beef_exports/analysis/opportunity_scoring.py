@@ -409,22 +409,23 @@ def _score_opportunities(
     total_recent_fob = recent["fob_usd"].sum()
 
     # K (volume-confidence shrinkage constant) is the median group total
-    # across the FULL (product_col, geo_col) grid, unfiltered by whatever
-    # is fixed here - ADR 0005 defines it per (product_level, geo_level)
-    # pair, not scoped to one product/country.
-    k_group_cols = [c for c in (fixed_col, ranked_col) if c is not None]
-    k_cols_sql = ", ".join(k_group_cols)
+    # WITHIN THIS SELECTION - every group of the ranked axis that sold
+    # anything in the window under the fixed filter, before the
+    # min_years_active cut. "Big" means big among the markets (or products)
+    # being compared, so nothing outside the selection moves its scores
+    # (ADR 0006 amendment; ADR 0005 originally used the whole grid).
     k_sql = f"""
         WITH group_totals AS (
-            SELECT {k_cols_sql}, sum(fob_usd) AS total_fob_usd
+            SELECT {ranked_col} AS group_value, sum(fob_usd) AS total_fob_usd
             FROM ({_PERIODIZED_SQL})
             WHERE periods_ago < ?
-            GROUP BY {k_cols_sql}
+                {fixed_filter_sql}
+            GROUP BY {ranked_col}
             HAVING sum(fob_usd) > 0
         )
         SELECT median(total_fob_usd) FROM group_totals
     """
-    k = con.execute(k_sql, [latest_idx, window_years]).fetchone()[0]
+    k = con.execute(k_sql, [latest_idx, window_years, *fixed_params]).fetchone()[0]
 
     result = trend.merge(recent, on="group_value", how="left").rename(
         columns={"fob_usd": "recent_year_fob_usd"}

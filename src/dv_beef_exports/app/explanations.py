@@ -419,21 +419,22 @@ def explain_volume_confidence(row: pd.Series, sel: Selection) -> MetricExplanati
         )
     return MetricExplanation(
         key="volume_confidence",
-        title="Size vs. a typical market",
+        title=f"Size vs. a typical {sel.ranked_noun}",
         value=f"{vc:.2f}",
         meaning=(
             "Whether this trade is big enough for its trend to be meaningful, compared "
-            "with a typical product-market pair in this data. 0.5 = exactly typical."
+            f"with a typical {sel.ranked_noun} in this selection (the middle one of all "
+            f"{plural(sel.ranked_noun)} with any sales). 0.5 = exactly typical."
         ),
         for_you=(
             f"{sel.flow} totalled **{money(total)}** over the window. A typical "
-            f"product-market pair here totals about {money(typical)}, so this one is "
+            f"{sel.ranked_noun} here totals about {money(typical)}, so this one is "
             f"**{size}**."
         ),
         action=action,
         caveat=(
             "This says whether the numbers are *statistically* solid, not whether the "
-            "market is *commercially* worth it - most product-market pairs are tiny, so "
+            "market is *commercially* worth it - most trades are tiny, so "
             "the bar is low. For that, look at the size figures."
         ),
     )

@@ -133,7 +133,7 @@ def _charts_for(key: str, ctx: dict) -> tuple[alt.TopLevelMixin | None, alt.TopL
         )
     if key == "volume_confidence":
         typical = implied_typical_size(row["total_fob_usd"], row["volume_confidence"])
-        return charts.volume_context(subject, row["total_fob_usd"], typical), compare(
+        return charts.volume_context(subject, row["total_fob_usd"], typical, nouns), compare(
             "volume_confidence", "Size vs. typical", charts.fmt_two, reference=("typical", 0.5)
         )
     if key == "confidence":

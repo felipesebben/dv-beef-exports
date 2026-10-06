@@ -39,7 +39,7 @@ against each other rather than taken on faith:
 > Data through **August 2026**.
 
 `rank_markets()` returns 52 countries. **Libya ranks #1** with an
-`opportunity_score` of `60.66`; **Singapore ranks #7** with `31.33`.
+`opportunity_score` of `60.92`; **Singapore ranks #7** with `31.93`.
 
 The running example stays **Singapore**, not Libya: its eight-period
 history exercises every step (trend fit, recent momentum, price trend), and
@@ -364,21 +364,24 @@ adjustment:
 ```
 volume_confidence = total_fob_usd / (total_fob_usd + K)
 
-K = median total_fob_usd across every group in the full
-    (fixed_level x ranked_level) grid, over the same window
+K = median total_fob_usd across every group of the ranked level that
+    sold anything in the window, within the current selection
 ```
 
 `K` is derived from the data, not hardcoded, so it re-scales automatically
-across aggregation levels. It is deliberately computed over the **whole
-grid**, not just the groups matching the current filter — so "big" means
-big compared to a typical product-country pair, not big compared to the
-handful of countries on screen.
+across aggregation levels. It is computed **within the selection**: every
+group of the ranked axis with any sales under the fixed filter, before the
+`min_years_active` cut, so "big" means big compared to a typical market
+for *this* product (or a typical product for *this* market). Trade outside
+the selection cannot move it, so a query's scores depend only on that
+query's data (ADR 0006 amendment; it used to be the median of the whole
+product × country grid).
 
-**Worked example.** For the `ncm_code x country` grid over Sep 2016 –
-Aug 2026, across 1,247 groups: **`K` = $52,119**. Singapore:
+**Worked example.** For frozen livers over Sep 2016 – Aug 2026, across
+the 113 countries that bought any: **`K` = $10,228**. Singapore:
 
 ```
-308,611 / (308,611 + 52,119) = 0.856
+308,611 / (308,611 + 10,228) = 0.968
 ```
 
 **How to read it.** 0.5 means "exactly median-sized". Above ~0.8 means
@@ -386,10 +389,10 @@ Aug 2026, across 1,247 groups: **`K` = $52,119**. Singapore:
 — Egypt, at $84M, scores 0.9994.
 
 **Where it misleads.** This is the most over-readable number in the set.
-Singapore's 0.856 sounds like a strong endorsement; the underlying figure
+Singapore's 0.968 sounds like a strong endorsement; the underlying figure
 is **$308,611 of total trade spread over eight years**, roughly $39k/year.
-It cleared the bar because the bar is the median group ($52,119), and the
-median product-country pair in this dataset is tiny. `volume_confidence`
+It cleared the bar because the bar is the median frozen-liver market
+($10,228 over ten years), and most of those markets are tiny. `volume_confidence`
 answers *"is this statistically substantial?"*, never *"is this
 commercially worthwhile?"* — that is [`materiality`](#step-14--materiality)'s
 job.
@@ -410,11 +413,11 @@ confidence = (coverage_score * trend_r2_adj * volume_confidence) ^ (1/3)
 **Worked example.**
 
 ```
-(0.8 * 0.915100 * 0.855518) ^ (1/3) = 0.856
+(0.8 * 0.915100 * 0.967921) ^ (1/3) = 0.892
 ```
 
-**How to read it.** **An index on a 0–1 scale, not a probability.** 0.856
-does not mean "85.6% likely to be right"; it means all three evidence legs
+**How to read it.** **An index on a 0–1 scale, not a probability.** 0.892
+does not mean "89.2% likely to be right"; it means all three evidence legs
 are individually strong. Read it as a band rather than a precise value:
 
 | Range | Reading |
@@ -423,8 +426,8 @@ are individually strong. Read it as a band rather than a precise value:
 | 0.40 – 0.70 | one leg is weak; check which before acting |
 | below 0.40 | thin evidence — treat the index as a hypothesis only |
 
-Always look at which leg is *binding*. A confidence of 0.52 from
-`coverage 0.4 x fit 0.69 x volume 0.50` (Guyana, #13 in this ranking) is a
+Always look at which leg is *binding*. A confidence of 0.61 from
+`coverage 0.4 x fit 0.69 x volume 0.84` (Guyana, #13 in this ranking) is a
 short-history problem first — four active periods of ten — and the
 remedy, waiting for more years, is different from the remedy for a weak
 fit or a tiny market.
@@ -719,7 +722,7 @@ credit.
 **Where it misleads.** It is **relative to the ranked set**, so the same
 market gets a different value in a different query. Singapore is 0.710
 among frozen-liver buyers, 0.730 among `category = offal` buyers (#2
-there, index 67.62), and 0.509 among buyers of all beef (#47, index
+there, index 67.65), and 0.509 among buyers of all beef (#47, index
 46.78). Compare `attractiveness` and `opportunity_score` within one result
 only, never across two. Percentiles also discard distance: the top grower
 gets 1.0 whether it beats the next one by 1 point or by 100.
@@ -752,17 +755,17 @@ not proof there is nothing there.
 **Worked example.** Singapore:
 
 ```
-100 x 0.709729 x (1 - 0.002146) x 0.476744 x (0.5 + 0.5 x 0.855584)
-= 100 x 0.709729 x 0.997854 x 0.476744 x 0.927792
-= 31.33      →  #7 of 52
+100 x 0.709729 x (1 - 0.002146) x 0.476744 x (0.5 + 0.5 x 0.891524)
+= 100 x 0.709729 x 0.997854 x 0.476744 x 0.945762
+= 31.93      →  #7 of 52
 ```
 
 | Country | Attractiveness | Headroom | Materiality | Evidence | Index | Rank (old score) |
 | --- | --- | --- | --- | --- | --- | --- |
-| Libya | 0.799 | 0.987 | 0.904 | 0.851 | **60.66** | #1 (#8) |
-| Singapore | 0.710 | 0.998 | 0.477 | 0.928 | **31.33** | #7 (#1) |
+| Libya | 0.799 | 0.987 | 0.904 | 0.855 | **60.92** | #1 (#8) |
+| Singapore | 0.710 | 0.998 | 0.477 | 0.946 | **31.93** | #7 (#1) |
 | Egypt | 0.825 | 0.387 | 0.996 | 0.938 | **29.84** | #8 (#22) |
-| Guyana | 0.707 | 0.999 | 0.211 | 0.760 | **11.34** | #13 (#2) |
+| Guyana | 0.707 | 0.999 | 0.211 | 0.807 | **12.06** | #13 (#2) |
 
 Singapore has the set's top growth but loses half its index to size.
 Egypt has the best attractiveness in the set and is the biggest buyer
@@ -794,7 +797,7 @@ anchor. Dropping the price trend changes 4 of the 10. It is kept
 deliberately (see `docs/decisions/0006-opportunity-index.md`).
 
 **Where it misleads.** Multiplying four factors **compresses the scale**.
-The frozen-liver indexes run from 0.005 to 60.66 with a median of 1.98,
+The frozen-liver indexes run from 0.005 to 60.92 with a median of 2.16,
 while the all-beef view's run from 0.09 to 85.90 with a median of 33.17.
 "31 vs. 60" means "ranks lower", not "half as good", and a value means
 nothing outside its own query, because attractiveness is percentile-based
@@ -846,12 +849,12 @@ typical shapes:
 | | Libya | Singapore | Egypt |
 | --- | --- | --- | --- |
 | Rank | **#1** | #7 | #8 |
-| `opportunity_score` | 60.66 | 31.33 | 29.84 |
+| `opportunity_score` | 60.92 | 31.93 | 29.84 |
 | `attractiveness` | 0.799 | 0.710 | 0.825 |
 | `share_pct` | 1.3% | 0.21% | 61.3% |
 | `tons_per_year` | 235.7 | 22.8 | 5,722.5 |
 | `materiality` | 0.904 | 0.477 | 0.996 |
-| `confidence` | 0.702 | 0.856 | 0.876 |
+| `confidence` | 0.709 | 0.892 | 0.876 |
 | `years_active` | 4 | 8 | 9 |
 
 - **Libya** is the all-round lead. It is growing (+63.6%/yr long-run,
@@ -882,7 +885,7 @@ Real issues in the output as it stands today, not hypotheticals.
 ### Percentiles are relative to the ranked set
 
 The same market gets a different `attractiveness`, and so a different
-index, in every query. Singapore is 31.33 (#7) for frozen livers, 67.62
+index, in every query. Singapore is 31.93 (#7) for frozen livers, 67.65
 (#2) for offal, and 46.78 (#47) for all beef. Adding or removing one
 market from a ranked set, for example one crossing the 4-period floor
 when a new month shifts the periods, moves every other market's
@@ -907,7 +910,7 @@ pricing power.
 ### The index is compressed; read its factors
 
 Multiplying four 0–1 factors pushes many values toward the bottom of the
-scale: the frozen-liver median index is 1.98 out of 100. The index is a
+scale: the frozen-liver median index is 2.16 out of 100. The index is a
 ranking key. How far apart two markets really are, and why, is in their
 factors.
 
@@ -917,8 +920,8 @@ Brazil reports $124,038,703 of frozen boneless beef (`02023000`) to Turkey
 in calendar 2024. Turkey's own statistics report about $5.25M from Brazil
 (UN Comtrade, outside this database; see `docs/ROADMAP.md`). ComexStat
 records the *declared* destination, so transit and free-zone flows count
-as Turkish demand. The index does nothing about this: Turkey ranks #16 of
-130 for boneless beef with an index of 57.51, on 13,026 t/yr (materiality
+as Turkish demand. The index does nothing about this: Turkey ranks #14 of
+130 for boneless beef with an index of 57.47, on 13,026 t/yr (materiality
 0.998). Treat its score as suspect until the destination-side check is
 done.
 
@@ -931,7 +934,7 @@ recent volume dwarfs its old volume, old-but-real periods can fall under
 ~$40–50k early in the window, a four-year gap, then a steep ramp. Those
 early periods are under 1% of today's median, so they are trimmed and the
 fit sees only the recent ramp — +513%/yr instead of +205%/yr. Mexico is
-#1 for boneless beef (index 75.57).
+#1 for boneless beef (index 75.53).
 
 That is arguably the right reading (a gap followed by a ramp is a market
 opening, and the old trade was a different regime), but it is a judgement
@@ -940,9 +943,9 @@ window deserves a look at its raw history before its growth is trusted.
 
 ### `K`'s bar is low
 
-At `K = $52,119` for the `ncm_code x country` grid, a market averaging
-$39k/year clears `volume_confidence = 0.86`. The formula is behaving as
-designed — the median product-country pair really is that small — but the
+At `K = $10,228` for frozen livers, a market averaging $39k/year clears
+`volume_confidence = 0.97`. The formula is behaving as designed — the
+median frozen-liver market really is that small — but the
 label "volume confidence" oversells it. Under the old score this let tiny
 markets top the ranking. The index's `materiality` factor now supplies the
 commercial floor, so the low bar only nudges `confidence`, and so

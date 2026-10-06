@@ -6,6 +6,8 @@ the query itself, and display labels/formats.
 
 from __future__ import annotations
 
+import threading
+
 import altair as alt
 import duckdb
 import pandas as pd
@@ -184,8 +186,27 @@ NO_BLOC_LABEL = "(no bloc)"
 
 
 @st.cache_resource
-def connection() -> duckdb.DuckDBPyConnection:
+def _database() -> duckdb.DuckDBPyConnection:
+    """The database, opened once per server process."""
     return get_connection(DB_PATH)
+
+
+_thread_local = threading.local()
+
+
+def connection() -> duckdb.DuckDBPyConnection:
+    """A DuckDB connection for the current thread.
+
+    The database is opened once (cached), but a DuckDB connection must not
+    run queries from two threads at once - and Streamlit runs every session,
+    and a rerun that superseded a still-running one, in its own thread. So
+    each thread gets its own cursor onto the shared database.
+    """
+    cursor = getattr(_thread_local, "cursor", None)
+    if cursor is None:
+        cursor = _database().cursor()
+        _thread_local.cursor = cursor
+    return cursor
 
 
 @st.cache_data
