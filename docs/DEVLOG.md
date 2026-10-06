@@ -142,7 +142,7 @@ something worth remembering (see `docs/WORKFLOW.md`).
 - Fixed the results table's "Total tons" column, broken since #21 by a
   stale `total_kg` label key.
 
-## 2026-10-03 — Market overview (Phase 2 complete)
+## 2026-10-03 — Market overview (Phase 2 complete) (#27)
 - `analysis/market_overview.py`: the descriptive metrics skipped earlier —
   `market_trend()` (value, tons, $/t, destinations and YoY per 12-month
   period) and `top_destinations_matrix()` (top destinations × products,
@@ -167,7 +167,7 @@ something worth remembering (see `docs/WORKFLOW.md`).
   visit (Streamlit otherwise resets widgets that aren't rendered).
 
 
-## 2026-10-03 — Phase 4 researched, moved to backlog
+## 2026-10-03 — Phase 4 researched, moved to backlog (#28)
 - A free-sources-only survey of where importing companies can be named,
   for the ten top-scoring markets:
   `docs/research/beef-importer-free-data-sources.md` (cited, each claim
@@ -181,7 +181,11 @@ something worth remembering (see `docs/WORKFLOW.md`).
   opportunity score suspect (Brazil reports 24x more frozen boneless beef
   to Turkey than Turkey reports receiving).
 
-## 2026-10-03 — Automated monthly refresh (Phase 1's last piece)
+- Scope decision right after: the project uses **Brazil's export data
+  (ComexStat) only**. The Comtrade share layer and destination-side
+  cross-checks join the Phase 4 backlog rather than being built next.
+
+## 2026-10-03 — Automated monthly refresh (Phase 1's last piece) (#29)
 - `ingestion/refresh.py` + `.github/workflows/refresh.yml`: weekly check
   for a newly published month; re-pulls the previous year through the
   newest month, gates the result, and opens a PR with the refreshed
@@ -200,7 +204,24 @@ something worth remembering (see `docs/WORKFLOW.md`).
     rows against ComexStat's own per-code totals - zero mismatches live.
 - ADRs 0003 and 0004 amended accordingly.
 
-## 2026-10-03 — Deployable to Streamlit Community Cloud
+## 2026-10-03 — First live refresh run; Actions on Node 24 (#30)
+- First forced run of the refresh workflow on GitHub's runners succeeded
+  in about a minute: ComexStat's WAF lets GitHub's IPs through, and the
+  reconciliation gate passed for every code-month of 2025-2026. Nothing
+  new was published (Aug 2026 already loaded), so it correctly opened no
+  PR - the push/PR step still gets its first real test when September's
+  data lands.
+- That run flagged Node 20 deprecation: `actions/checkout` bumped v4 → v7
+  and `astral-sh/setup-uv` v3 → v10.2.0 in both workflows. setup-uv no
+  longer publishes floating major tags (`@v10` is a 404), so it's pinned to
+  the commit SHA, as its README recommends. checkout v6+ stores git
+  credentials in a separate included file - transparent to the refresh
+  workflow's `git push`.
+
+## 2026-10-03 — Deployed to Streamlit Community Cloud (#31)
+- Live on Streamlit Community Cloud from `main`, shared privately with
+  invited viewers; redeploys on every merge, so monthly refresh PRs reach
+  the app with no extra step.
 - `docs/DEPLOY.md`: free deploy from `main`, restricted to invited viewers.
 - `DB_PATH` is now anchored to the code's location instead of the working
   directory (a relative path would silently create an empty database
@@ -208,7 +229,7 @@ something worth remembering (see `docs/WORKFLOW.md`).
   import path since Community Cloud isn't documented to install the project.
   Verified in a fresh environment without the package, from another folder.
 
-## 2026-10-05 — Frontend UX review
+## 2026-10-05 — Frontend UX review (#32)
 - Reviewed all three pages at phone and desktop width (headless Chrome
   screenshots), for a business reader on a phone.
 - **Who-buys-what is now an HTML table** (`st.html`): it scrolls sideways
@@ -231,7 +252,7 @@ something worth remembering (see `docs/WORKFLOW.md`).
   definition sits behind "What this measures".
 - Light theme forced (`.streamlit/config.toml`) - the styling assumes it.
 
-## 2026-10-05 — Explain page charts
+## 2026-10-05 — Explain page charts (#33)
 - Every metric card on "Explain the numbers" now has two titled charts
   (`app/explain_charts.py`), side by side on desktop, stacked on a phone:
   - **context** - the metric over time or what it's made of: change vs.
@@ -251,7 +272,7 @@ something worth remembering (see `docs/WORKFLOW.md`).
   on short bar charts, truncated subtitles and titles on a phone.
 
 
-## 2026-10-05 — Opportunity index (ADR 0006)
+## 2026-10-05 — Opportunity index (ADR 0006) (#34)
 - `opportunity_score` is now a 0-100 index, replacing ADR 0005's
   growth × (1 − share): `100 × attractiveness × headroom × materiality ×
   evidence`. Attractiveness ranks long-run growth (30%), recent momentum
