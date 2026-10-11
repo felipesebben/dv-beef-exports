@@ -325,8 +325,13 @@ something worth remembering (see `docs/WORKFLOW.md`).
   +$17k. 72,917 rows in `marts.exports`.
 - The workflow now says what to fix when the push is refused, and revision
   changes under 0.01% print as "+0.0015%" instead of "+1.53e-05" (#39).
+- Token follow-up (2026-10-11): the token was regenerated but the secret
+  not updated, so the next run failed even earlier, at checkout ("could not
+  read Username" = token rejected outright). With the secret updated, a
+  forced run passed; it had nothing new to push, so the push itself is
+  first exercised by October's data.
 
-## 2026-10-11 — Find suppliers: SIGSIF approvals + exports by state (ADR 0007)
+## 2026-10-11 — Find suppliers: SIGSIF approvals + exports by state (ADR 0007) (#40)
 - A colleague asked whether MAPA's SIGSIF (which plants may export to which
   markets) could join the project. The legacy site is off-limits to
   automation (`robots.txt`: `Disallow: /`, a WAF, one-plant-at-a-time
@@ -358,7 +363,7 @@ something worth remembering (see `docs/WORKFLOW.md`).
   blocks the trade data). Refresh PRs use one `data/refresh` branch.
 - The database was compacted (DuckDB keeps deleted space): 16.5 MB.
 
-## 2026-10-11 — UI refresh and a deeper market overview
+## 2026-10-11 — UI refresh and a deeper market overview (#41)
 - Look: Roboto everywhere (theme font, and on every chart), one set of
   colour tokens in `common.py` instead of hex scattered across pages,
   page headers with an eyebrow and a lede, quiet section labels, a softer
