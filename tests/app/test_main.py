@@ -276,3 +276,22 @@ def test_explain_page_offers_find_suppliers_for_a_country_result() -> None:
 
     assert any(s.value.endswith("Where to source it") for s in at.subheader)
     assert at.button[-1].label == "Find suppliers"
+
+
+def test_overview_renders_every_analysis_section() -> None:
+    at = _overview()
+
+    assert not at.exception
+    # the value bridge's and the dependency chart's sentences only render with them
+    captions = " ".join(c.value for c in at.caption)
+    assert "drove it" in captions or "both played a part" in captions
+    assert "of the value in the latest 12 months" in captions
+
+
+def test_overview_inside_one_country_breaks_down_by_product() -> None:
+    at = _overview()
+    mexico = next(o for o in at.selectbox(key="overview_market").options if o == "Mexico")
+    at.selectbox(key="overview_market").set_value(("country", "Mexico", mexico)).run()
+
+    assert not at.exception
+    assert any("compares products" in c.value for c in at.caption)

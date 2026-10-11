@@ -32,9 +32,17 @@ if _SRC not in sys.path:
 
 import streamlit as st  # noqa: E402
 
-from dv_beef_exports.app.common import connection, run_query, sidebar_controls  # noqa: E402
+from dv_beef_exports.app.common import (  # noqa: E402
+    apply_style,
+    connection,
+    run_query,
+    sidebar_controls,
+)
 
-st.set_page_config(page_title="Beef Export Opportunities", layout="wide")
+st.set_page_config(
+    page_title="Beef export opportunities", page_icon=":material/public:", layout="wide"
+)
+apply_style()
 
 overview = st.Page(
     "app_pages/overview.py",

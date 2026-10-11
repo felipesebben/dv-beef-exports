@@ -8,7 +8,9 @@ import pytest
 from dv_beef_exports.app.explanations import (
     Selection,
     bottom_line,
+    bridge_note,
     concentration_note,
+    dependency_note,
     explain_all,
     explain_confidence,
     explain_growth,
@@ -356,3 +358,39 @@ def test_supplier_summary_for_a_market_without_a_list() -> None:
     assert "**Libya doesn't approve Brazilian plants one by one**" in text
     assert "doesn't mean it's closed" in text
     assert "Brazil shipped no frozen livers to Libya in the last 12 months." in text
+
+
+def _bridge(volume: float, price: float) -> dict:
+    return {"previous": 14e9, "volume_effect": volume, "price_effect": price}
+
+
+def test_bridge_note_names_what_drove_the_change() -> None:
+    assert bridge_note(_bridge(0.93e9, 2.04e9)) == (
+        "Value rose $3.0B: more volume added $930M and higher prices added $2.0B - prices drove it."
+    )
+    assert bridge_note(_bridge(-0.9e9, 0.1e9)).endswith("volume drove it.")
+    assert "less volume took off $900M" in bridge_note(_bridge(-0.9e9, 0.1e9))
+    assert bridge_note(_bridge(0.5e9, 0.4e9)).endswith("volume and price both played a part.")
+
+
+def _concentration(*rows: tuple[str, float, float]) -> pd.DataFrame:
+    return pd.DataFrame(rows, columns=["top_destination", "top1_share", "top5_share"])
+
+
+def test_dependency_note_compares_with_a_year_earlier() -> None:
+    text = dependency_note(
+        _concentration(("China", 0.56, 0.77), ("China", 0.49, 0.72)), "destination"
+    )
+
+    assert text.startswith("China took **49%** of the value in the latest 12 months, down from 56%")
+    assert "the top 5 destinations took 72%" in text
+    assert text.endswith("Heavy dependence on one buyer is a risk to plan around.")
+
+
+def test_dependency_note_flags_a_new_top_buyer_and_a_spread_trade() -> None:
+    text = dependency_note(
+        _concentration(("Chile", 0.30, 0.6), ("Japan", 0.25, 0.6)), "destination"
+    )
+
+    assert "taking over from Chile" in text
+    assert text.endswith("No single buyer dominates.")

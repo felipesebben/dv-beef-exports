@@ -68,9 +68,12 @@ class MetricExplanation:
 
 
 def money(usd: float) -> str:
-    """$524, $9,083, $27.3k, $309k, $84.0M, $17.5B."""
+    """$524, $9,083, $27.3k, $309k, $84.0M, $930M, $17.5B - three significant
+    figures at most."""
     if abs(usd) >= 1e9:
         return f"${usd / 1e9:.1f}B"
+    if abs(usd) >= 1e8:
+        return f"${usd / 1e6:.0f}M"
     if abs(usd) >= 1e6:
         return f"${usd / 1e6:.1f}M"
     if abs(usd) >= 1e5:
@@ -753,3 +756,49 @@ def supplier_summary(
         f" Start with the {in_top_state:,} in {origin.iloc[0]['state']}." if in_top_state else ""
     )
     return f"{lead}\n\n{flow}{start}"
+
+
+def bridge_note(bridge: dict) -> str:
+    """One sentence on what moved the value: volume, price, or both - from
+    market_overview.change_bridge()."""
+    vol, price = bridge["volume_effect"], bridge["price_effect"]
+    change = vol + price
+    verb = "rose" if change >= 0 else "fell"
+
+    def part(effect: float, up: str, down: str) -> str:
+        return f"{up if effect >= 0 else down} {'added' if effect >= 0 else 'took off'} " + (
+            money(abs(effect))
+        )
+
+    volume = part(vol, "more volume", "less volume")
+    pricing = part(price, "higher prices", "lower prices")
+    if abs(vol) >= 2 * abs(price):
+        lead = "volume drove it"
+    elif abs(price) >= 2 * abs(vol):
+        lead = "prices drove it"
+    else:
+        lead = "volume and price both played a part"
+    return f"Value {verb} {money(abs(change))}: {volume} and {pricing} - {lead}."
+
+
+def dependency_note(concentration: pd.DataFrame, noun: str) -> str:
+    """One sentence on dependency on the biggest buyer, now vs a year
+    earlier - from market_overview.concentration_trend()."""
+    latest = concentration.iloc[-1]
+    text = (
+        f"{latest['top_destination']} took **{pct(latest['top1_share'])}** of the value in "
+        f"the latest 12 months"
+    )
+    if len(concentration) > 1:
+        before = concentration.iloc[-2]
+        diff = latest["top1_share"] - before["top1_share"]
+        if before["top_destination"] != latest["top_destination"]:
+            text += f", taking over from {before['top_destination']}"
+        elif abs(diff) >= 0.01:
+            direction = "down" if diff < 0 else "up"
+            text += f", {direction} from {pct(before['top1_share'])} a year earlier"
+    return f"{text}; the top 5 {plural(noun)} took {pct(latest['top5_share'])}. " + (
+        "Heavy dependence on one buyer is a risk to plan around."
+        if latest["top1_share"] >= 0.4
+        else "No single buyer dominates."
+    )

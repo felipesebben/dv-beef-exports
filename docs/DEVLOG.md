@@ -357,3 +357,24 @@ something worth remembering (see `docs/WORKFLOW.md`).
   run (a SIGSIF-only change opens its own PR; a SIGSIF failure never
   blocks the trade data). Refresh PRs use one `data/refresh` branch.
 - The database was compacted (DuckDB keeps deleted space): 16.5 MB.
+
+## 2026-10-11 — UI refresh and a deeper market overview
+- Look: Roboto everywhere (theme font, and on every chart), one set of
+  colour tokens in `common.py` instead of hex scattered across pages,
+  page headers with an eyebrow and a lede, quiet section labels, a softer
+  table style.
+- Colour-blind safe throughout: growth blue, decline orange - never
+  green/red (the Explain page's decline bars were red). Validated with the
+  dataviz skill's palette checker (blue/orange CVD dE 24.7). Metric deltas
+  set their colour explicitly; every change label carries a sign too.
+- The overview now explains the numbers, not just shows them:
+  - KPI tiles with 10-period sparklines (2 x 2 on a phone);
+  - month by month against a year earlier (the latest months are below
+    last year's, which 12-month totals hide);
+  - a value waterfall: of the +$3.0B, +$0.9B came from volume and +$2.0B
+    from price - prices drove it;
+  - which destinations drove the change (US +$525M, China +$443M);
+  - premium vs bulk buyers (price per ton against tons);
+  - dependency on the biggest buyer (China 49%, down from 56%).
+  With one country picked, those sections break down by product instead.
+- `money()` drops the decimal from $100M up ("$930M", not "$930.0M").

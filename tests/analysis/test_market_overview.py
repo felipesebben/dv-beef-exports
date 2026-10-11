@@ -8,7 +8,15 @@ import duckdb
 import pandas as pd
 import pytest
 
-from dv_beef_exports.analysis.market_overview import market_trend, top_destinations_matrix
+from dv_beef_exports.analysis.market_overview import (
+    change_bridge,
+    concentration_trend,
+    destination_movers,
+    market_trend,
+    monthly_comparison,
+    price_volume_map,
+    top_destinations_matrix,
+)
 
 LIVERS, TONGUES = "02062200", "02062100"
 
@@ -229,3 +237,131 @@ def test_top_destinations_matrix_validates_its_axes(con: duckdb.DuckDBPyConnecti
         top_destinations_matrix(con, top_n=0)
     with pytest.raises(ValueError, match="rank_by"):
         top_destinations_matrix(con, rank_by="unit_price_usd_per_ton")
+
+
+# --- the overview's analysis sections ----------------------------------------
+
+
+def test_monthly_comparison_pairs_each_month_with_a_year_earlier(
+    con: duckdb.DuckDBPyConnection,
+) -> None:
+    _insert(
+        con,
+        [
+            {"country": "A", "year": 2023, "month": m, "fob_usd": 10, "metric_ton": 1}
+            for m in range(1, 13)
+        ]
+        + [
+            {"country": "A", "year": 2024, "month": m, "fob_usd": 15, "metric_ton": 1}
+            for m in range(1, 13)
+            if m != 3
+        ],
+    )
+
+    monthly = monthly_comparison(con)
+
+    assert len(monthly) == 12
+    assert monthly["month"].iloc[0] == pd.Timestamp("2024-01-01")
+    assert monthly["month"].iloc[-1] == pd.Timestamp("2024-12-01")
+    assert monthly["fob_usd"].iloc[0] == 15 and monthly["prev_fob_usd"].iloc[0] == 10
+    assert monthly["fob_usd"].iloc[2] == 0  # no March 2024 shipments: a zero, not a gap
+    assert monthly["fob_yoy_pct"].iloc[0] == pytest.approx(0.5)
+
+
+def test_change_bridge_splits_the_change_into_volume_and_price() -> None:
+    trend = pd.DataFrame(
+        {
+            "period_start": pd.to_datetime(["2023-01-01", "2024-01-01"]),
+            "period_end": pd.to_datetime(["2023-12-01", "2024-12-01"]),
+            "fob_usd": [1000.0, 1650.0],  # 10 t at $100 -> 11 t at $150
+            "metric_ton": [10.0, 11.0],
+        }
+    )
+
+    bridge = change_bridge(trend)
+
+    assert bridge["volume_effect"] == pytest.approx(100)  # +1 t at the old $100
+    assert bridge["price_effect"] == pytest.approx(550)  # +$50 on the new 11 t
+    assert bridge["previous"] + bridge["volume_effect"] + bridge["price_effect"] == (
+        pytest.approx(bridge["latest"])
+    )
+    assert change_bridge(trend.assign(metric_ton=[0.0, 11.0])) is None
+
+
+def test_destination_movers_lists_gains_then_losses(con: duckdb.DuckDBPyConnection) -> None:
+    _insert(
+        con,
+        [
+            {"country": "Up", "year": 2023, "fob_usd": 100, "metric_ton": 1},
+            {"country": "Up", "year": 2024, "fob_usd": 400, "metric_ton": 1},
+            {"country": "New", "year": 2024, "fob_usd": 50, "metric_ton": 1},
+            {"country": "Down", "year": 2023, "fob_usd": 300, "metric_ton": 1},
+            {"country": "Down", "year": 2024, "fob_usd": 100, "metric_ton": 1},
+            {"country": "Flat", "year": 2023, "fob_usd": 70, "metric_ton": 1},
+            {"country": "Flat", "year": 2024, "fob_usd": 70, "metric_ton": 1},
+        ],
+    )
+
+    movers = destination_movers(con, top_n=5)
+
+    assert list(movers["destination"]) == ["Up", "New", "Down"]
+    assert list(movers["change"]) == [300, 50, -200]
+    assert pd.isna(movers["change_pct"].iloc[1])  # a new buyer has no growth rate
+
+
+def test_movers_can_rank_products_inside_one_country(con: duckdb.DuckDBPyConnection) -> None:
+    _insert(
+        con,
+        [
+            {"country": "A", "year": 2023, "fob_usd": 100, "metric_ton": 1},
+            {"country": "A", "year": 2024, "fob_usd": 50, "metric_ton": 1},
+            {"country": "A", "year": 2024, "fob_usd": 80, "metric_ton": 1, "ncm_code": TONGUES},
+        ],
+    )
+
+    movers = destination_movers(con, geo_level="country", geo_value="A", rows="ncm_code")
+
+    assert list(movers["destination"]) == [TONGUES, LIVERS]
+
+
+def test_price_volume_map_compares_each_buyer_with_the_average(
+    con: duckdb.DuckDBPyConnection,
+) -> None:
+    _insert(
+        con,
+        [
+            {"country": "Premium", "year": 2024, "fob_usd": 300, "metric_ton": 1},
+            {"country": "Bulk", "year": 2024, "fob_usd": 900, "metric_ton": 9},
+        ],
+    )
+
+    pv = price_volume_map(con).set_index("destination")
+
+    # the average is sum-then-divide: $1,200 / 10 t = $120/t
+    assert pv.loc["Premium", "unit_price_usd_per_ton"] == 300
+    assert pv.loc["Premium", "price_vs_average"] == pytest.approx(2.5)
+    assert pv.loc["Bulk", "price_vs_average"] == pytest.approx(100 / 120)
+
+
+def test_concentration_trend_tracks_the_top_buyer_share(con: duckdb.DuckDBPyConnection) -> None:
+    _insert(
+        con,
+        [
+            {"country": "Big", "year": 2023, "fob_usd": 900, "metric_ton": 1},
+            {"country": "Small", "year": 2023, "fob_usd": 100, "metric_ton": 1},
+            {"country": "Big", "year": 2024, "fob_usd": 500, "metric_ton": 1},
+            {"country": "Small", "year": 2024, "fob_usd": 500, "metric_ton": 1},
+        ],
+    )
+
+    trend = concentration_trend(con, window_years=2)
+
+    assert list(trend["top1_share"]) == [pytest.approx(0.9), pytest.approx(0.5)]
+    assert list(trend["top5_share"]) == [pytest.approx(1.0), pytest.approx(1.0)]
+    assert list(trend["destinations"]) == [2, 2]
+    assert trend["top_destination"].iloc[0] == "Big"
+
+
+def test_overview_sections_validate_their_grouping(con: duckdb.DuckDBPyConnection) -> None:
+    with pytest.raises(ValueError, match="rows must be one of"):
+        destination_movers(con, rows="planet")
