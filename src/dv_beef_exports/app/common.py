@@ -296,6 +296,10 @@ def geo_label(level: str, value: str | None) -> str:
     return value if value is not None else NO_BLOC_LABEL
 
 
+# the Find suppliers page's pickers - shared so the Explain page can pre-fill them
+SUPPLIERS_MARKET_KEY, SUPPLIERS_PRODUCT_KEY = "suppliers_market", "suppliers_product"
+
+
 def _keep(name: str) -> dict:
     """Widget kwargs that keep a sidebar value for the whole session - the
     sidebar isn't rendered on the overview page, and without this Streamlit

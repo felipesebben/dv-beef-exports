@@ -30,6 +30,7 @@ from dv_beef_exports.app.common import (
     CHART_MUTED,
     MONEY_AXIS_LABELS,
     TONS_AXIS_LABELS,
+    capitalize,
     period_label,
 )
 from dv_beef_exports.app.explanations import money, tons
@@ -590,3 +591,52 @@ def index_breakdown(factors: dict[str, float]) -> alt.LayerChart:
 
 def fmt_index(v: float) -> str:
     return f"{v:.0f}"
+
+
+# --- find suppliers: where a flow ships from ---------------------------------
+
+
+def origin_states_chart(origin: pd.DataFrame, product: str, market: str) -> alt.LayerChart:
+    """Share of the flow's value by Brazilian state of production, largest
+    first (top TOP_N, the rest summed as "Other states"). Single series: no
+    legend; the share sits at each bar's end."""
+    shown = origin.head(TOP_N)[["state", "share", "fob_usd"]]
+    rest = origin.iloc[TOP_N:]
+    if len(rest):
+        shown = pd.concat(
+            [
+                shown,
+                pd.DataFrame(
+                    {
+                        "state": [f"Other states ({len(rest)})"],
+                        "share": [rest["share"].sum()],
+                        "fob_usd": [rest["fob_usd"].sum()],
+                    }
+                ),
+            ]
+        )
+    data = shown.assign(label=[f"{s * 100:.0f}%" if s >= 0.005 else "<1%" for s in shown["share"]])
+    window = (
+        period_label(origin["period_start"].iloc[0], origin["period_end"].iloc[0])
+        if len(origin)
+        else ""
+    )
+    base = alt.Chart(data).encode(
+        y=alt.Y("state:N", sort=None, title=None, axis=alt.Axis(domain=False, labelLimit=170)),
+    )
+    bars = base.mark_bar(cornerRadiusEnd=3, height={"band": 0.7}, color=HIGHLIGHT).encode(
+        x=alt.X("share:Q", title="Share of the value shipped", axis=alt.Axis(format="%")),
+        tooltip=[
+            alt.Tooltip("state:N", title="State"),
+            alt.Tooltip("share:Q", title="Share", format=".1%"),
+            alt.Tooltip("fob_usd:Q", title="Value", format="$,.0f"),
+        ],
+    )
+    labels = base.mark_text(align="left", dx=4, color=CHART_INK).encode(x="share:Q", text="label:N")
+    return (bars + labels).properties(
+        title=_title(
+            "Where it ships from",
+            [f"{capitalize(product)} to {market}, by Brazilian state of production", window],
+        ),
+        height=alt.Step(26),
+    )

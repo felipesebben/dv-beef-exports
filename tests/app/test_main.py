@@ -238,3 +238,41 @@ def test_who_buys_what_is_a_scrollable_html_table() -> None:
 
     assert not at.exception
     assert any('class="bm"' in body and "China" in body for body in html)
+
+
+def _suppliers_page() -> AppTest:
+    at = _overview()
+    at.switch_page("app_pages/suppliers.py").run(timeout=30)
+    return at
+
+
+def test_suppliers_page_lists_approved_plants_for_a_listed_market() -> None:
+    at = _suppliers_page()
+    at.selectbox(key="suppliers_market").set_value("Mexico")
+    at.selectbox(key="suppliers_product").set_value(_product_option("02023000")).run()
+
+    assert not at.exception
+    assert not at.sidebar.selectbox  # the ranking query doesn't apply here
+    assert "approved" in at.markdown[0].value
+    assert any(s.value == "Approved plants" for s in at.subheader)
+    plants = at.dataframe[0].value
+    assert {"Plant", "State's share", "Search", "Map"} <= set(plants.columns)
+    assert not plants.empty
+
+
+def test_suppliers_page_falls_back_to_proven_exporters_for_an_unlisted_market() -> None:
+    at = _suppliers_page()
+    at.selectbox(key="suppliers_market").set_value("Libya")
+    at.selectbox(key="suppliers_product").set_value(_product_option(LIVERS)).run()
+
+    assert not at.exception
+    assert "doesn't approve Brazilian plants one by one" in at.markdown[0].value
+    assert any(s.value == "Proven exporters" for s in at.subheader)
+    assert "Status" not in at.dataframe[0].value.columns
+
+
+def test_explain_page_offers_find_suppliers_for_a_country_result() -> None:
+    at = _explain_page(_rank_markets_for(_app(), LIVERS))
+
+    assert any(s.value.endswith("Where to source it") for s in at.subheader)
+    assert at.button[-1].label == "Find suppliers"

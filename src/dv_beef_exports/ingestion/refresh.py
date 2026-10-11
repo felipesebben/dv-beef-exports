@@ -26,6 +26,13 @@ Per docs/decisions/0003 and 0004 (both amended 2026-10-03):
      previous 12 months' range is flagged for review (a warning, not a
      failure - beef exports genuinely swing).
    - revisions: every already-published month whose total changed is listed.
+5. Re-pull the same window by Brazilian state of origin (exports_by_state.py)
+   and gate it the same way: per state, the rows must add up to the
+   per-country table exactly.
+6. On every run, new ComexStat month or not: download MAPA's SIGSIF export
+   approvals and store a snapshot if the beef approvals changed (sigsif.py,
+   ADR 0007). A SIGSIF failure is reported, not fatal - it must never block
+   the trade data.
 
 The outcome is written as a markdown summary (the refresh PR's body).
 """
@@ -40,7 +47,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import duckdb
+import requests
 
+from dv_beef_exports.ingestion import sigsif
 from dv_beef_exports.ingestion.comexstat_client import fetch_exports, fetch_latest_period
 from dv_beef_exports.ingestion.duckdb_loader import (
     DB_PATH,
@@ -50,7 +59,16 @@ from dv_beef_exports.ingestion.duckdb_loader import (
     ingest_raw,
     refresh_dim_country,
 )
+from dv_beef_exports.ingestion.exports_by_state import (
+    STATE_DETAILS,
+    build_by_state,
+    ingest_by_state,
+    state_mismatches,
+)
 from dv_beef_exports.ingestion.ncm_codes import all_codes
+
+# module global (not a default argument) so tests can swap in a fake
+sigsif_refresh = sigsif.refresh
 
 # re-pull this many calendar years before the newest month's year
 REVISION_WINDOW_YEARS = 1
@@ -72,15 +90,20 @@ class RefreshResult:
     new_months: list[Month] = field(default_factory=list)
     revisions: list[tuple[Month, float, float]] = field(default_factory=list)
     mismatches: list[tuple[str, Month, int, int]] = field(default_factory=list)
+    state_mismatches: list[tuple[str, str, Month, int, int]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    sigsif: sigsif.SigsifResult | None = None
+    sigsif_error: str | None = None
 
     @property
     def passed(self) -> bool:
-        return not self.mismatches
+        return not self.mismatches and not self.state_mismatches
 
     @property
     def changed(self) -> bool:
-        return self.ran and self.passed and bool(self.new_months or self.revisions)
+        trade = self.ran and bool(self.new_months or self.revisions)
+        approvals = self.sigsif is not None and self.sigsif.changed
+        return self.passed and (trade or approvals)
 
 
 def run_refresh(
@@ -97,41 +120,68 @@ def run_refresh(
     try:
         latest_before = _latest_stored_month(con)
         result = RefreshResult(latest_published, published_on, latest_before)
-        if not force and latest_before is not None and latest_before >= latest_published:
-            return result
-
-        result.ran = True
-        totals_before = _monthly_totals(con)
-        codes = all_codes()
-        window_years = range(year - revision_window_years, year + 1)
-
-        for window_year in window_years:
-            period_from, period_to = _year_period(window_year, latest_published)
-            rows = fetch_exports(codes, period_from, period_to)
-            ingest_raw(con, rows, codes, period_from, period_to)
-            time.sleep(seconds_between_calls)
-
-        refresh_dim_country(con)
-        build_staging(con)
-        build_marts(con)
-
-        for window_year in window_years:
-            period_from, period_to = _year_period(window_year, latest_published)
-            time.sleep(seconds_between_calls)
-            official = fetch_exports(codes, period_from, period_to, details=["ncm"])
-            result.mismatches += _reconcile(con, official)
-
-        totals_after = _monthly_totals(con)
-        result.new_months = sorted(set(totals_after) - set(totals_before))
-        result.revisions = [
-            (m, totals_before[m], totals_after.get(m, 0.0))
-            for m in sorted(totals_before)
-            if m in _months_in(window_years) and totals_after.get(m, 0.0) != totals_before[m]
-        ]
-        result.warnings = _plausibility_warnings(totals_after, result.new_months)
+        if force or latest_before is None or latest_before < latest_published:
+            _refresh_trade(con, result, revision_window_years, seconds_between_calls)
+        _refresh_sigsif(con, result)
         return result
     finally:
         con.close()
+
+
+def _refresh_sigsif(con: duckdb.DuckDBPyConnection, result: RefreshResult) -> None:
+    if sigsif_refresh is None:
+        return
+    try:
+        result.sigsif = sigsif_refresh(con)
+    except (sigsif.SigsifError, requests.RequestException) as exc:
+        result.sigsif_error = str(exc)
+
+
+def _refresh_trade(
+    con: duckdb.DuckDBPyConnection,
+    result: RefreshResult,
+    revision_window_years: int,
+    seconds_between_calls: float,
+) -> None:
+    """Steps 2-5 of the module docstring, recorded on `result`."""
+    year, _ = latest_published = result.latest_published
+    result.ran = True
+    totals_before = _monthly_totals(con)
+    codes = all_codes()
+    window_years = range(year - revision_window_years, year + 1)
+
+    for window_year in window_years:
+        period_from, period_to = _year_period(window_year, latest_published)
+        rows = fetch_exports(codes, period_from, period_to)
+        ingest_raw(con, rows, codes, period_from, period_to)
+        time.sleep(seconds_between_calls)
+
+    refresh_dim_country(con)
+    build_staging(con)
+    build_marts(con)
+
+    for window_year in window_years:
+        period_from, period_to = _year_period(window_year, latest_published)
+        time.sleep(seconds_between_calls)
+        official = fetch_exports(codes, period_from, period_to, details=["ncm"])
+        result.mismatches += _reconcile(con, official)
+
+    totals_after = _monthly_totals(con)
+    result.new_months = sorted(set(totals_after) - set(totals_before))
+    result.revisions = [
+        (m, totals_before[m], totals_after.get(m, 0.0))
+        for m in sorted(totals_before)
+        if m in _months_in(window_years) and totals_after.get(m, 0.0) != totals_before[m]
+    ]
+    result.warnings = _plausibility_warnings(totals_after, result.new_months)
+
+    for window_year in window_years:
+        period_from, period_to = _year_period(window_year, latest_published)
+        time.sleep(seconds_between_calls)
+        rows = fetch_exports(codes, period_from, period_to, details=STATE_DETAILS)
+        ingest_by_state(con, rows, codes, period_from, period_to)
+    build_by_state(con)
+    result.state_mismatches = state_mismatches(con, window_years)
 
 
 def _year_period(year: int, latest: Month) -> tuple[str, str]:
@@ -221,8 +271,23 @@ def _change_pct(before: float, after: float) -> str:
 def summary_markdown(result: RefreshResult) -> str:
     """The refresh PR's body."""
     published = f"{_label(result.latest_published)} (published {result.published_on})"
-    if not result.ran:
-        return f"No refresh needed: the database already has ComexStat's latest month, {published}."
+    if result.ran:
+        lines = _trade_summary(result, published)
+    else:
+        lines = [
+            "No trade refresh needed: the database already has ComexStat's latest month, "
+            f"{published}."
+        ]
+    lines += ["", *_sigsif_summary(result)]
+    if result.ran or (result.sigsif and result.sigsif.changed):
+        lines += [
+            "",
+            "Review the numbers before merging (ADR 0003: manual review for the first few cycles).",
+        ]
+    return "\n".join(lines)
+
+
+def _trade_summary(result: RefreshResult, published: str) -> list[str]:
     before = _label(result.latest_before) if result.latest_before else "nothing"
     lines = [
         f"Monthly ComexStat refresh. Latest published month: **{published}**; "
@@ -230,7 +295,7 @@ def summary_markdown(result: RefreshResult) -> str:
         "",
         "## Quality gate",
     ]
-    if result.passed:
+    if not result.mismatches:
         lines.append(
             "- :white_check_mark: **Reconciliation passed**: for every product code and month "
             "re-pulled, our per-country rows add up exactly to ComexStat's own per-code totals."
@@ -243,6 +308,20 @@ def summary_markdown(result: RefreshResult) -> str:
         lines += [
             f"  - {code} {_label(m)}: ours ${ours:,} vs ComexStat ${official:,}"
             for code, m, ours, official in result.mismatches[:20]
+        ]
+    if not result.state_mismatches:
+        lines.append(
+            "- :white_check_mark: **By-state rows reconcile**: per Brazilian state of origin, "
+            "they add up exactly to the per-country rows."
+        )
+    else:
+        lines.append(
+            f"- :x: **By-state rows FAILED** for {len(result.state_mismatches)} "
+            "code-country-month(s). Do not merge:"
+        )
+        lines += [
+            f"  - {code} {country} {_label(m)}: by state ${ours:,} vs per country ${theirs:,}"
+            for code, country, m, ours, theirs in result.state_mismatches[:20]
         ]
     lines += [f"- :warning: {w}" for w in result.warnings] or [
         "- :white_check_mark: New months are within the usual range."
@@ -259,11 +338,55 @@ def summary_markdown(result: RefreshResult) -> str:
         ]
     else:
         lines.append("- none")
+    return lines
+
+
+def _sigsif_summary(result: RefreshResult) -> list[str]:
+    lines = ["## SIGSIF export approvals (MAPA)"]
+    if result.sigsif_error:
+        return [
+            *lines,
+            f"- :warning: Could not refresh: {result.sigsif_error}. The trade data above is "
+            "unaffected; the previous snapshot stays in place.",
+        ]
+    found = result.sigsif
+    if found is None:
+        return [*lines, "- not checked"]
+    if not found.changed:
+        return [
+            *lines,
+            f"- No change since the last snapshot ({found.approvals:,} beef approvals).",
+        ]
+    lines.append(
+        f"- New snapshot stored: {found.approvals:,} beef approvals, {found.plants:,} plant "
+        "registry rows."
+    )
+    if found.added or found.removed:
+        lines.append(f"- {len(found.added):,} approval(s) added, {len(found.removed):,} removed:")
+        lines += [
+            f"  - added: SIF {sif}, {country}, {product}"
+            for country, sif, product in found.added[:15]
+        ]
+        lines += [
+            f"  - removed: SIF {sif}, {country}, {product}"
+            for country, sif, product in found.removed[:15]
+        ]
     lines += [
-        "",
-        "Review the numbers before merging (ADR 0003: manual review for the first few cycles).",
+        f"- :warning: Country **{name}** has no ComexStat match - add it to "
+        "`sigsif.COUNTRY_OVERRIDES`."
+        for name in found.unmapped_countries
     ]
-    return "\n".join(lines)
+    return lines
+
+
+def pr_title(result: RefreshResult) -> str:
+    """What the refresh PR is about, in one line."""
+    parts = []
+    if result.ran and (result.new_months or result.revisions):
+        parts.append(f"ComexStat through {_label(result.latest_published)}")
+    if result.sigsif and result.sigsif.changed:
+        parts.append(f"SIGSIF approvals as of {result.sigsif.fetched_at:%Y-%m-%d}")
+    return "data: " + (" + ".join(parts) or "refresh")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -284,6 +407,7 @@ def main(argv: list[str] | None = None) -> int:
         with open(github_output, "a", encoding="utf-8") as out:
             out.write(f"changed={'true' if result.changed else 'false'}\n")
             out.write(f"latest={_label(result.latest_published)}\n")
+            out.write(f"title={pr_title(result)}\n")
     return 0 if result.passed else 1
 
 

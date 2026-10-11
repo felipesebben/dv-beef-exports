@@ -24,6 +24,7 @@ from dv_beef_exports.app.explanations import (
     plural,
     share_text,
     stalled_since,
+    supplier_summary,
     tons,
 )
 
@@ -308,3 +309,50 @@ def test_price_reads_level_and_trend() -> None:
     assert "about **-6% a year**" in falling.for_you
     assert "Falling prices" in falling.action
     assert "Rising prices" in rising.action
+
+
+_ORIGIN = pd.DataFrame({"uf": ["GO", "RO"], "state": ["Goiás", "Rondônia"], "share": [0.38, 0.21]})
+
+
+def _plants(*rows: tuple[str, str]) -> pd.DataFrame:
+    return pd.DataFrame(rows, columns=["uf", "status"])
+
+
+def test_supplier_summary_for_a_listed_market() -> None:
+    plants = _plants(("GO", "active"), ("GO", "active"), ("RO", "active"), ("MT", "suspended"))
+    listing = {"listed": True, "via_bloc": None}
+
+    text = supplier_summary("Mexico", "boneless beef", listing, _ORIGIN, plants)
+
+    assert "**3 plants are approved** to ship boneless beef to Mexico" in text
+    assert "**Goiás supplied 38%**" in text and "then Rondônia (21%)" in text
+    assert text.endswith("Start with the 2 in Goiás.")
+
+
+def test_supplier_summary_names_the_bloc_list() -> None:
+    listing = {"listed": True, "via_bloc": "European Union (EU)"}
+
+    text = supplier_summary("Germany", "beef", listing, _ORIGIN, _plants(("MT", "active")))
+
+    assert "**1 plant is approved**" in text and "(through the European Union (EU) list)" in text
+
+
+def test_supplier_summary_when_nothing_is_approved() -> None:
+    listing = {"listed": True, "via_bloc": None}
+
+    text = supplier_summary("China", "cured beef", listing, _ORIGIN, _plants(("GO", "expired")))
+
+    assert "**No plant is currently approved to ship cured beef to China**" in text
+    assert "Start with" not in text
+
+
+def test_supplier_summary_for_a_market_without_a_list() -> None:
+    listing = {"listed": False, "via_bloc": None}
+
+    text = supplier_summary(
+        "Libya", "frozen livers", listing, pd.DataFrame(), _plants(("RO", "active"))
+    )
+
+    assert "**Libya doesn't approve Brazilian plants one by one**" in text
+    assert "doesn't mean it's closed" in text
+    assert "Brazil shipped no frozen livers to Libya in the last 12 months." in text

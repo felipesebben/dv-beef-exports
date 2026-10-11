@@ -37,6 +37,11 @@ can point us toward but not solve directly.
 - Streamlit dashboard surfacing the Phase 2 metrics for internal use
   (`app/`: market overview, opportunity ranking, and a plain-language
   "explain the numbers" page)
+- **Supplier side (2026-10-11, ADR 0007):** a "Find suppliers" page - for
+  a market and product, which Brazilian states ship it there (ComexStat by
+  state of production) and which plants MAPA has approved to export it
+  there (SIGSIF open data, snapshotted weekly). This is the *Brazilian*
+  supplier side; foreign importers stay in Phase 4.
 
 ## Phase 4 — Client discovery (backlog)
 - Separate research effort: identifying actual importer companies within

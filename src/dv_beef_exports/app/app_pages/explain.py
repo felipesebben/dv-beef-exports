@@ -16,10 +16,13 @@ from dv_beef_exports.analysis.opportunity_scoring import period_history
 from dv_beef_exports.app import explain_charts as charts
 from dv_beef_exports.app.common import (
     RANKED_NOUNS,
+    SUPPLIERS_MARKET_KEY,
+    SUPPLIERS_PRODUCT_KEY,
     connection,
     display_name,
     geo_label,
     product_phrase,
+    product_scope_options,
     query_summary,
     style_chart,
 )
@@ -97,6 +100,16 @@ def _share_title(sel: Selection) -> tuple[str, str]:
     if sel.mode == "markets":
         return f"Share of Brazil's {sel.product} exports", f"Going to {sel.market}, per period"
     return f"Share of all Brazil sells to {sel.market}", f"Taken by {sel.product}, per period"
+
+
+def _supplier_pair(subject: str, query: dict) -> tuple[str, str, str | None] | None:
+    """(country, product_level, product_value) when this result is one product
+    in one country - the pair the Find suppliers page takes - else None."""
+    if query["geo_level"] != "country":
+        return None
+    if query["mode"] == "markets":
+        return subject, query["product_level"], query["product_value"]
+    return query["geo_value"], query["product_level"], subject
 
 
 def _charts_for(key: str, ctx: dict) -> tuple[alt.TopLevelMixin | None, alt.TopLevelMixin]:
@@ -239,3 +252,21 @@ for explanation in explain_all(row, sel, history, result):
                 st.altair_chart(style_chart(context_chart), width="stretch")
         with chart_right:
             st.altair_chart(style_chart(comparison), width="stretch")
+
+pair = _supplier_pair(subject_value, query)
+if pair is not None:
+    country, product_level, product_value = pair
+    with st.container(border=True):
+        st.subheader(":material/factory: Where to source it")
+        st.markdown(
+            f"See which Brazilian states ship {product_phrase(product_level, product_value)} "
+            f"to {country}, and which plants MAPA has approved to export it there."
+        )
+        if st.button("Find suppliers", icon=":material/arrow_forward:", type="primary"):
+            st.session_state[SUPPLIERS_MARKET_KEY] = country
+            st.session_state[SUPPLIERS_PRODUCT_KEY] = next(
+                option
+                for option in product_scope_options(connection())
+                if option[:2] == (product_level, product_value)
+            )
+            st.switch_page("app_pages/suppliers.py")

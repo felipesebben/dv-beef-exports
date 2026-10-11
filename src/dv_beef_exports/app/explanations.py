@@ -700,3 +700,56 @@ def concentration_note(
         f"here largely reflect that one {destination_noun} - a change in its demand moves "
         "the whole picture."
     )
+
+
+def supplier_summary(
+    market: str,
+    product: str,
+    listing: dict,
+    origin: pd.DataFrame,
+    plants: pd.DataFrame,
+) -> str:
+    """The "Find suppliers" page's headline: whether the market keeps a
+    per-plant list, how many plants can ship, and where to start looking.
+    `plants` is approved_plants() for a listed market, experienced_exporters()
+    otherwise; `origin` is origin_states()."""
+    active = plants[plants["status"] == "active"] if len(plants) else plants
+    if origin.empty:
+        flow = f"Brazil shipped no {product} to {market} in the last 12 months."
+    else:
+        top = origin.iloc[0]
+        flow = (
+            f"In the last 12 months, **{top['state']} supplied {pct(top['share'])}** of the "
+            f"{product} Brazil shipped to {market}"
+            + (
+                f", then {origin.iloc[1]['state']} ({pct(origin.iloc[1]['share'])})."
+                if len(origin) > 1
+                else "."
+            )
+        )
+    if not listing["listed"]:
+        lead = (
+            f"**{market} doesn't approve Brazilian plants one by one**, so MAPA keeps no "
+            "plant list for it - that doesn't mean it's closed: a SIF plant can usually ship "
+            "with the right health certificate. Below are proven exporters instead: "
+            f"{len(active):,} plants on other markets' lists for {product}."
+        )
+    elif active.empty:
+        lead = (
+            f"**No plant is currently approved to ship {product} to {market}** - MAPA's "
+            f"list for {market} covers other products, or every matching approval is "
+            "suspended or expired. Brazil can't ship it there until that changes."
+        )
+    else:
+        bloc = f" (through the {listing['via_bloc']} list)" if listing["via_bloc"] else ""
+        lead = (
+            f"**{len(active):,} {'plant is' if len(active) == 1 else 'plants are'} approved** "
+            f"to ship {product} to {market}{bloc}, per MAPA's list."
+        )
+    in_top_state = (
+        int((active["uf"] == origin.iloc[0]["uf"]).sum()) if len(active) and not origin.empty else 0
+    )
+    start = (
+        f" Start with the {in_top_state:,} in {origin.iloc[0]['state']}." if in_top_state else ""
+    )
+    return f"{lead}\n\n{flow}{start}"
