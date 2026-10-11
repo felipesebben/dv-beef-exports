@@ -1,15 +1,18 @@
 """
 Streamlit prototype (Phase 3) over the Phase 2 analysis.
 
-Entry point for a three-page app:
+Entry point for a four-page app:
 - app_pages/overview.py - market overview (analysis.market_overview), with
   its own product/market pickers
 - app_pages/opportunities.py - opportunity ranking (analysis.opportunity_scoring)
 - app_pages/explain.py - the same ranking explained in plain language
+- app_pages/suppliers.py - where to source a product for a market
+  (analysis.suppliers: ComexStat by state + MAPA's SIGSIF approvals), with
+  its own pickers
 
 The two ranking pages share one sidebar query, rendered and run here
-before the page, so they always show the same selection. The overview page
-doesn't use it, so the sidebar is hidden there; its widgets keep their
+before the page, so they always show the same selection. The other pages
+don't use it, so the sidebar is hidden there; its widgets keep their
 values across the switch (persist_state="session" in sidebar_controls).
 
 Run with: uv run streamlit run src/dv_beef_exports/app/main.py
@@ -42,21 +45,26 @@ overview = st.Page(
 page = st.navigation(
     [
         overview,
-        st.Page(
+        opportunities := st.Page(
             "app_pages/opportunities.py",
             title="Opportunities",
             icon=":material/leaderboard:",
         ),
-        st.Page(
+        explain := st.Page(
             "app_pages/explain.py",
             title="Explain the numbers",
             icon=":material/lightbulb:",
+        ),
+        st.Page(
+            "app_pages/suppliers.py",
+            title="Find suppliers",
+            icon=":material/factory:",
         ),
     ],
     position="top",
 )
 
-if page.title != overview.title:
+if page.title in (opportunities.title, explain.title):
     con = connection()
     query = sidebar_controls(con)
     st.session_state.query = query

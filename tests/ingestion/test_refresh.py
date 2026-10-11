@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from dv_beef_exports.ingestion import refresh
+from dv_beef_exports.ingestion import refresh, sigsif
 from dv_beef_exports.ingestion.duckdb_loader import (
     build_marts,
     build_staging,
@@ -30,6 +31,7 @@ class FakeComexStat:
         self.latest = latest
         self.rows = rows
         self.total_override: dict = {}  # (year, month) -> fob, to fake a mismatch
+        self.state = "Mato Grosso"
 
     def latest_period(self) -> tuple[int, int, str]:
         return (*self.latest, "2026-10-06")
@@ -49,7 +51,7 @@ class FakeComexStat:
                 }
                 for y, m in months
             ]
-        return [
+        rows = [
             {
                 "coNcm": CODE,
                 "ncm": "Frozen bovine meat, boneless",
@@ -62,6 +64,10 @@ class FakeComexStat:
             for y, m in months
             for country, fob in self.rows[(y, m)]
         ]
+        if details and "state" in details:
+            # all from one state, unless a test splits it
+            rows = [{**row, "state": self.state} for row in rows]
+        return rows
 
 
 @pytest.fixture
@@ -74,6 +80,7 @@ def _install(monkeypatch, fake: FakeComexStat) -> None:
     monkeypatch.setattr(refresh, "fetch_exports", fake.fetch_exports)
     monkeypatch.setattr(refresh, "refresh_dim_country", lambda con: None)
     monkeypatch.setattr(refresh, "all_codes", lambda: [CODE])
+    monkeypatch.setattr(refresh, "sigsif_refresh", None)  # SIGSIF has its own tests
 
 
 def _seed(db: Path, fake: FakeComexStat, period_from: str, period_to: str) -> None:
@@ -106,7 +113,7 @@ def test_does_nothing_when_the_database_already_has_the_latest_month(db, monkeyp
     result = run_refresh(db, seconds_between_calls=0)
 
     assert not result.ran and not result.changed
-    assert "No refresh needed" in summary_markdown(result)
+    assert "No trade refresh needed" in summary_markdown(result)
 
 
 def test_adds_the_new_month_and_applies_a_revision(db, monkeypatch) -> None:
@@ -191,3 +198,96 @@ def test_main_writes_github_outputs_and_exits_nonzero_on_failure(
 )
 def test_revision_change_reads_as_a_percentage(before, after, expected) -> None:
     assert refresh._change_pct(before, after) == expected
+
+
+def test_refresh_pulls_by_state_and_reconciles_it(db, monkeypatch) -> None:
+    fake = FakeComexStat((2026, 9), _history(9))
+    _seed(db, fake, "2025-01", "2026-08")
+    _install(monkeypatch, fake)
+
+    result = run_refresh(db, seconds_between_calls=0)
+
+    assert result.passed and not result.state_mismatches
+    con = get_connection(db)
+    states = con.execute("SELECT DISTINCT uf FROM marts.exports_by_state").fetchall()
+    con.close()
+    assert states == [("MT",)]
+    assert "By-state rows reconcile" in summary_markdown(result)
+
+
+def test_a_by_state_mismatch_fails_the_refresh(db, monkeypatch) -> None:
+    fake = FakeComexStat((2026, 9), _history(9))
+    _seed(db, fake, "2025-01", "2026-08")
+    _install(monkeypatch, fake)
+    real_fetch = fake.fetch_exports
+
+    def short_by_state(codes, period_from, period_to, details=None, month_detail=True):
+        rows = real_fetch(codes, period_from, period_to, details, month_detail)
+        if details and "state" in details:
+            rows = rows[1:]  # each year's state-level pull loses its first row
+        return rows
+
+    monkeypatch.setattr(refresh, "fetch_exports", short_by_state)
+
+    result = run_refresh(db, seconds_between_calls=0)
+
+    assert not result.passed and not result.changed
+    assert [(country, month) for _, country, month, _, _ in result.state_mismatches] == [
+        ("China", (2025, 1)),
+        ("China", (2026, 1)),
+    ]
+    assert "By-state rows FAILED" in summary_markdown(result)
+
+
+def _sigsif_result(changed: bool) -> sigsif.SigsifResult:
+    return sigsif.SigsifResult(
+        changed=changed,
+        fetched_at=datetime(2026, 10, 11, tzinfo=UTC),
+        approvals=5693,
+        plants=823,
+        added=[("MÉXICO", "4507", "PRODUTOS EM NATUREZA (BOVÍDEO) (DHC)")],
+    )
+
+
+def test_a_sigsif_change_alone_opens_a_pr(db, monkeypatch) -> None:
+    fake = FakeComexStat((2026, 8), _history(8))
+    _seed(db, fake, "2025-01", "2026-08")
+    _install(monkeypatch, fake)
+    monkeypatch.setattr(refresh, "sigsif_refresh", lambda con: _sigsif_result(changed=True))
+
+    result = run_refresh(db, seconds_between_calls=0)
+
+    assert not result.ran and result.changed
+    assert refresh.pr_title(result) == "data: SIGSIF approvals as of 2026-10-11"
+    summary = summary_markdown(result)
+    assert "New snapshot stored: 5,693 beef approvals" in summary
+    assert "added: SIF 4507, MÉXICO" in summary
+
+
+def test_an_unchanged_sigsif_snapshot_opens_nothing(db, monkeypatch) -> None:
+    fake = FakeComexStat((2026, 8), _history(8))
+    _seed(db, fake, "2025-01", "2026-08")
+    _install(monkeypatch, fake)
+    monkeypatch.setattr(refresh, "sigsif_refresh", lambda con: _sigsif_result(changed=False))
+
+    result = run_refresh(db, seconds_between_calls=0)
+
+    assert not result.changed
+    assert "No change since the last snapshot" in summary_markdown(result)
+
+
+def test_a_sigsif_failure_never_blocks_the_trade_refresh(db, monkeypatch) -> None:
+    fake = FakeComexStat((2026, 9), _history(9))
+    _seed(db, fake, "2025-01", "2026-08")
+    _install(monkeypatch, fake)
+
+    def broken(con):
+        raise sigsif.SigsifError("503 downloading the approvals file")
+
+    monkeypatch.setattr(refresh, "sigsif_refresh", broken)
+
+    result = run_refresh(db, seconds_between_calls=0)
+
+    assert result.passed and result.changed  # September still lands
+    assert refresh.pr_title(result) == "data: ComexStat through 2026-09"
+    assert "Could not refresh: 503" in summary_markdown(result)

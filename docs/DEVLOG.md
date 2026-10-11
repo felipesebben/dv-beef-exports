@@ -325,3 +325,35 @@ something worth remembering (see `docs/WORKFLOW.md`).
   +$17k. 72,917 rows in `marts.exports`.
 - The workflow now says what to fix when the push is refused, and revision
   changes under 0.01% print as "+0.0015%" instead of "+1.53e-05" (#39).
+
+## 2026-10-11 — Find suppliers: SIGSIF approvals + exports by state (ADR 0007)
+- A colleague asked whether MAPA's SIGSIF (which plants may export to which
+  markets) could join the project. The legacy site is off-limits to
+  automation (`robots.txt`: `Disallow: /`, a WAF, one-plant-at-a-time
+  lookups), and the logged-in platform needs personal credentials - but
+  MAPA publishes the same lists as **CC-BY open data**, monthly. That's
+  the source: two CSV downloads, no login.
+- `ingestion/sigsif.py`: bovine approvals plus their plants' registry rows,
+  snapshotted only when the content changes, so approvals and suspensions
+  can be followed over time from now on. No phone/e-mail ever, and no name
+  or address for a person-registered (CPF) plant - the repo is public.
+  Today: 5,693 beef approvals, 455 plants, all 55 destinations mapped to
+  ComexStat countries (the EU and the Eurasian Economic Union expanded to
+  their members).
+- Linking it to the trade data: ComexStat has no company dimension, but it
+  can split exports by **state of production**, and SIGSIF records each
+  plant's state. `ingestion/exports_by_state.py` pulls that from 2023
+  (59,161 rows; states add up to the per-country rows exactly). A state
+  is a lead for a plant, never proof it ships the flow.
+- SIGSIF approves *kinds* of product (raw, cured, heat-treated), not NCM
+  codes, so approvals map to our four categories; "raw" counts for both
+  frozen cuts and offal.
+- New "Find suppliers" page, also reachable from the Explain page: e.g.
+  46 plants approved for beef to Mexico; Goiás supplied 38% of what Brazil
+  shipped there in the last 12 months, so its 5 plants come first, each
+  with a web-search and a map link. Markets with no MAPA list (Libya,
+  Ghana, Guyana) aren't closed - the page shows proven exporters instead.
+- The weekly refresh now also re-pulls by state and checks SIGSIF on every
+  run (a SIGSIF-only change opens its own PR; a SIGSIF failure never
+  blocks the trade data). Refresh PRs use one `data/refresh` branch.
+- The database was compacted (DuckDB keeps deleted space): 16.5 MB.

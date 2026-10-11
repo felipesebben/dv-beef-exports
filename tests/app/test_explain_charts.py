@@ -66,10 +66,35 @@ def _all_charts() -> dict:
         "confidence": charts.confidence_context(ROW),
         "size": charts.size_context(HISTORY),
         "price": charts.price_context(HISTORY, 4_015, "countries"),
+        "origin": charts.origin_states_chart(ORIGIN, "boneless beef", "Mexico"),
         "compare": charts.comparison_chart(
             PEERS, "Target", "annual_growth_pct", "Growth per year", charts.fmt_growth, "countries"
         ),
     }
+
+
+ORIGIN = pd.DataFrame(
+    {
+        "uf": [f"S{i}" for i in range(12)],
+        "state": [f"State {i}" for i in range(12)],
+        "fob_usd": [500.0, 300.0] + [20.0] * 10,
+        "share": [0.5, 0.3] + [0.02] * 10,
+        "period_start": pd.Timestamp("2025-10-01"),
+        "period_end": pd.Timestamp("2026-09-01"),
+    }
+)
+
+
+def test_origin_chart_folds_the_tail_into_other_states() -> None:
+    spec = charts.origin_states_chart(ORIGIN, "boneless beef", "Mexico").to_dict()
+
+    rows = next(iter(spec["datasets"].values()))
+    assert len(rows) == charts.TOP_N + 1
+    assert rows[-1]["state"] == "Other states (2)"
+    assert rows[-1]["share"] == pytest.approx(0.04)
+    assert (
+        spec["title"]["subtitle"][0] == "Boneless beef to Mexico, by Brazilian state of production"
+    )
 
 
 @pytest.mark.parametrize("name", list(_all_charts()))

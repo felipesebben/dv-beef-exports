@@ -2,9 +2,10 @@ name: ComexStat refresh
 
 # Weekly check for a newly published ComexStat month (MDIC publishes in the
 # first week of the following month, on no fixed day - so poll weekly rather
-# than guess). When there's new data it re-pulls, runs the quality gate, and
-# opens a PR with the refreshed DuckDB file for review. See
-# docs/decisions/0003 (amended 2026-10-03) and ingestion/refresh.py.
+# than guess), and for changes to MAPA's SIGSIF export approvals (ADR 0007).
+# When there's new data it re-pulls, runs the quality gate, and opens a PR
+# with the refreshed DuckDB file for review. See docs/decisions/0003
+# (amended 2026-10-03) and ingestion/refresh.py.
 #
 # Needs one repository secret, REFRESH_PAT: a fine-grained personal access
 # token for this repo only, with "Contents: read and write" and "Pull
@@ -73,23 +74,24 @@ jobs:
         if: steps.refresh.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.REFRESH_PAT }}
-          LATEST: ${{ steps.refresh.outputs.latest }}
+          TITLE: ${{ steps.refresh.outputs.title }}
         run: |
-          branch="data/comexstat-refresh-${LATEST}"
+          # one branch: an unmerged refresh PR is updated by the next run, not duplicated
+          branch="data/refresh"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$branch"
           git add data/processed/comexstat.duckdb
-          git commit -m "data: ComexStat refresh through ${LATEST}"
+          git commit -m "${TITLE}"
           # a re-run before the PR is merged replaces the branch, not stacks on it
           if ! git push --force origin "$branch"; then
             echo "::error::Push refused. REFRESH_PAT can read this repo but not write to it - edit the token: Repository access must include this repo, and Contents must be 'Read and write' (see the comment at the top of refresh.yml)."
             exit 1
           fi
           if gh pr view "$branch" --json state --jq .state 2>/dev/null | grep -q OPEN; then
-            gh pr edit "$branch" --body-file refresh_summary.md
+            gh pr edit "$branch" --title "${TITLE}" --body-file refresh_summary.md
           else
             gh pr create --base main --head "$branch" \
-              --title "data: ComexStat refresh through ${LATEST}" \
+              --title "${TITLE}" \
               --body-file refresh_summary.md
           fi
