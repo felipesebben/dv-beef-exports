@@ -312,3 +312,16 @@ something worth remembering (see `docs/WORKFLOW.md`).
 - Full review sweep: every sidebar query through the ranking, the Explain
   wording and every chart - 532 queries, 687 Explain pages, 14,427
   charts, 0 failures.
+
+## 2026-10-10 — September data; refresh push blocked (#38, #39)
+- MDIC published September 2026 on 2026-10-06. The refresh workflow found
+  it, re-pulled, and passed the quality gate, but its last step failed:
+  `git push` got a 403 ("Permission ... denied"). `REFRESH_PAT` can read
+  the repo (the checkout worked) but not write to it - this was the first
+  run with new data, so the push had never been exercised. Fix is on the
+  token itself: Contents must be "Read and write" for this repo.
+- September landed anyway by running `ingestion/refresh.py` locally (#38):
+  $1,083.5M in September; June-August revised up by +$2.3M, +$0.9M and
+  +$17k. 72,917 rows in `marts.exports`.
+- The workflow now says what to fix when the push is refused, and revision
+  changes under 0.01% print as "+0.0015%" instead of "+1.53e-05" (#39).

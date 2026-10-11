@@ -82,7 +82,10 @@ jobs:
           git add data/processed/comexstat.duckdb
           git commit -m "data: ComexStat refresh through ${LATEST}"
           # a re-run before the PR is merged replaces the branch, not stacks on it
-          git push --force origin "$branch"
+          if ! git push --force origin "$branch"; then
+            echo "::error::Push refused. REFRESH_PAT can read this repo but not write to it - edit the token: Repository access must include this repo, and Contents must be 'Read and write' (see the comment at the top of refresh.yml)."
+            exit 1
+          fi
           if gh pr view "$branch" --json state --jq .state 2>/dev/null | grep -q OPEN; then
             gh pr edit "$branch" --body-file refresh_summary.md
           else
