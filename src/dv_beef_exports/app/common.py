@@ -7,6 +7,7 @@ the query itself, and display labels/formats.
 from __future__ import annotations
 
 import threading
+from html import escape
 
 import altair as alt
 import duckdb
@@ -138,17 +139,31 @@ TONS_AXIS_LABELS = "replace(format(datum.value, '~s'), 'G', 'B') + ' t'"
 # Chart chrome is deliberately recessive, so the ink goes to the data:
 # hairline gridlines on the value axis only, no ticks, muted axis text, and
 # axis titles anchored at the tip of the axis rather than its middle.
-CHART_INK = "#52514e"
-CHART_MUTED = "#898781"
-CHART_GRID = "#ecebe7"
-CHART_DOMAIN = "#d5d4ce"
+CHART_INK = "#4a4f57"
+CHART_MUTED = "#80868f"
+CHART_GRID = "#eceef2"
+CHART_DOMAIN = "#d3d7de"
+INK = "#1a1c1e"  # primary text - titles, names that are the data's identity
+FONT = "Roboto, 'Helvetica Neue', Arial, sans-serif"
+
+# Data colours - one place for every chart and table. From the dataviz
+# skill's validated palette: blue and orange pass every colour-blindness
+# check together (CVD dE 24.7), so growth is blue and decline orange
+# everywhere - never green/red. Grey is the neutral and the "everyone else".
+BLUE = "#2a78d6"  # the subject, growth, slot 1
+BLUE_DARK = "#1c5cab"  # the strongest value in a blue ramp
+BLUE_LIGHT = "#b7d3f6"  # the weakest still-visible value
+ORANGE = "#eb6834"  # decline, the one weak spot, slot 2
+GREY = "#cfd3da"  # peers / context
+UP, DOWN = BLUE, ORANGE
 
 
 def style_chart(chart: alt.TopLevelMixin) -> alt.TopLevelMixin:
     """Apply the app's shared chart style. Call on the finished (layered)
     chart, right before st.altair_chart."""
     return (
-        chart.configure_axis(
+        chart.configure(font=FONT)
+        .configure_axis(
             grid=True,
             gridColor=CHART_GRID,
             gridWidth=1,
@@ -170,14 +185,59 @@ def style_chart(chart: alt.TopLevelMixin) -> alt.TopLevelMixin:
         # every chart is titled: the title names it, the subtitle says how to read it
         .configure_title(
             anchor="start",
-            color="#0b0b0b",
-            fontSize=13,
-            fontWeight=600,
+            color=INK,
+            fontSize=14,
+            fontWeight=500,
             subtitleColor=CHART_MUTED,
-            subtitleFontSize=11,
-            offset=10,
+            subtitleFontSize=11.5,
+            subtitlePadding=4,
+            offset=14,
         )
     )
+
+
+# Small finishing touches on top of the theme (.streamlit/config.toml), which
+# owns fonts and colours. Kept to layout polish: metric weight, page width,
+# the 2 x 2 KPI grid on phones, and the eyebrow/section classes page headers use.
+_APP_CSS = """
+<style>
+.block-container { padding-top: 2.2rem; max-width: 1240px; }
+[data-testid="stMetric"] { background: #ffffff; }
+[data-testid="stMetricValue"] { font-weight: 500; letter-spacing: -0.01em; }
+[data-testid="stMetricLabel"] p { color: #5b616b; font-weight: 500; }
+h1 { letter-spacing: -0.02em; }
+h2, h3 { letter-spacing: -0.01em; }
+.app-eyebrow { font-size: .74rem; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: #1c5cab; margin: 0 0 .15rem; }
+.app-lede { color: #5b616b; font-size: 1rem; line-height: 1.5; margin: .2rem 0 .4rem;
+  max-width: 62rem; }
+/* KPI tiles: 2 x 2 on a phone instead of four full-width stacks */
+@media (max-width: 640px) {
+  .st-key-kpis > div { flex: 1 1 calc(50% - .5rem) !important; min-width: 0 !important; }
+  .st-key-kpis [data-testid="stMetricValue"] { font-size: 1.5rem; }
+}
+.app-section { font-size: .74rem; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: #80868f; margin: 1.6rem 0 -.2rem; }
+</style>
+"""
+
+
+def apply_style() -> None:
+    """The app-wide stylesheet - call once per run, from main.py."""
+    st.html(_APP_CSS)
+
+
+def page_header(eyebrow: str, title: str, lede: str) -> None:
+    """A page's header: a small coloured eyebrow, the title, and one line on
+    what the page answers."""
+    st.html(f'<p class="app-eyebrow">{escape(eyebrow)}</p>')
+    st.title(title)
+    st.html(f'<p class="app-lede">{escape(lede)}</p>')
+
+
+def section(label: str) -> None:
+    """A quiet uppercase label grouping the blocks below it."""
+    st.html(f'<p class="app-section">{escape(label)}</p>')
 
 
 # trade_bloc (unlike region) only covers 4 named blocs - most countries

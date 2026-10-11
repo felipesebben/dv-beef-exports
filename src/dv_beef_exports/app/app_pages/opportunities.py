@@ -10,13 +10,16 @@ import streamlit as st
 
 from dv_beef_exports.analysis.opportunity_scoring import METRIC_GLOSSARY, latest_period_end
 from dv_beef_exports.app.common import (
+    BLUE,
     CHART_INK,
     COLUMN_FORMATS,
     COLUMN_LABELS,
+    INK,
     PERCENT_COLUMNS,
     RANKED_COL_LABELS,
     connection,
     display_name,
+    page_header,
     query_summary,
     style_chart,
 )
@@ -48,13 +51,18 @@ _TABLE_ORDER = [
 def _opportunity_chart(result: pd.DataFrame, ranked_label: str) -> alt.LayerChart:
     top = result.nlargest(15, "opportunity_score")
     base = alt.Chart(top).encode(
-        x=alt.X("opportunity_score:Q", title="Opportunity index", scale=alt.Scale(domain=[0, 100])),
+        x=alt.X(
+            "opportunity_score:Q",
+            title="Opportunity index",
+            scale=alt.Scale(domain=[0, 100]),
+            axis=alt.Axis(values=[0, 20, 40, 60, 80, 100]),
+        ),
         y=alt.Y(
             "name:N",
             sort="-x",
             title=None,
             # country/product names are the data's identity: primary ink
-            axis=alt.Axis(labelColor="#0b0b0b", domain=False, labelLimit=200),
+            axis=alt.Axis(labelColor=INK, domain=False, labelLimit=200),
         ),
         tooltip=[
             alt.Tooltip("name:N", title=ranked_label),
@@ -65,7 +73,7 @@ def _opportunity_chart(result: pd.DataFrame, ranked_label: str) -> alt.LayerChar
             alt.Tooltip("total_fob_usd:Q", title="Value in the window", format="$,.0f"),
         ],
     )
-    bars = base.mark_bar(color="#2a78d6", cornerRadiusEnd=4)
+    bars = base.mark_bar(color=BLUE, cornerRadiusEnd=4)
     labels = base.mark_text(align="left", dx=4, color=CHART_INK).encode(
         text=alt.Text("opportunity_score:Q", format=".0f")
     )
@@ -129,12 +137,12 @@ def _reading_guide() -> None:
         )
 
 
-st.title("Opportunities")
 end_year, end_month = latest_period_end(connection())
-st.caption(
+page_header(
+    "Ranking",
+    "Opportunities",
     "Where Brazil's beef exports are growing steadily, in material volumes, with room left "
-    "to grow. "
-    f"Each year is a 12-month period ending {date(end_year, end_month, 1):%b %Y}."
+    f"to grow. Each year is a 12-month period ending {date(end_year, end_month, 1):%b %Y}.",
 )
 query = st.session_state.query
 st.caption(query_summary(query))

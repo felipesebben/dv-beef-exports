@@ -233,3 +233,258 @@ def top_destinations_matrix(
             "ton_share_of_total",
         ]
     ]
+
+
+def monthly_comparison(
+    con: duckdb.DuckDBPyConnection,
+    *,
+    product_level: str = "overall",
+    product_value: str | None = None,
+    geo_level: str = "overall",
+    geo_value: str | None = None,
+) -> pd.DataFrame:
+    """The latest 12 months, month by month, next to the same month a year
+    earlier - seasonality and momentum that 12-month totals smooth away.
+
+    Returns 12 rows, oldest first: month (first day of the month), fob_usd,
+    metric_ton, prev_fob_usd, prev_metric_ton (the same month a year
+    earlier), fob_yoy_pct (NaN when that month had nothing).
+    """
+    filter_sql, params = level_filters(product_level, product_value, geo_level, geo_value)
+    latest_idx = latest_month_index(con)
+    monthly = con.execute(
+        f"""
+        SELECT year * 12 + month - 1 AS idx, sum(fob_usd) AS fob_usd,
+               sum(metric_ton) AS metric_ton
+        FROM marts.exports
+        WHERE year * 12 + month - 1 > ? - 24
+            {filter_sql}
+        GROUP BY idx
+        """,
+        [latest_idx, *params],
+    ).df()
+    by_idx = monthly.set_index("idx")
+
+    def value(idx: int, column: str) -> float:
+        return float(by_idx.at[idx, column]) if idx in by_idx.index else 0.0
+
+    df = pd.DataFrame(
+        {
+            "month": [
+                pd.Timestamp(year=idx // 12, month=idx % 12 + 1, day=1)
+                for idx in range(latest_idx - 11, latest_idx + 1)
+            ],
+            "fob_usd": [value(i, "fob_usd") for i in range(latest_idx - 11, latest_idx + 1)],
+            "metric_ton": [value(i, "metric_ton") for i in range(latest_idx - 11, latest_idx + 1)],
+            "prev_fob_usd": [
+                value(i - 12, "fob_usd") for i in range(latest_idx - 11, latest_idx + 1)
+            ],
+            "prev_metric_ton": [
+                value(i - 12, "metric_ton") for i in range(latest_idx - 11, latest_idx + 1)
+            ],
+        }
+    )
+    df["fob_yoy_pct"] = _growth(df["fob_usd"], df["prev_fob_usd"])
+    return df
+
+
+def change_bridge(trend: pd.DataFrame) -> dict | None:
+    """How the latest 12 months' value moved from the 12 before, split into
+    a volume effect (the change in tons, at the old price) and a price
+    effect (the change in $/t, on the new tons) - the two add up exactly to
+    the change. `trend` is market_trend()'s output. None when the previous
+    period shipped no tons (no old price to hold constant).
+
+    Returns {previous, volume_effect, price_effect, latest, old_price,
+    new_price, previous_start, previous_end, latest_start, latest_end}.
+    """
+    if len(trend) < 2:
+        return None
+    old, new = trend.iloc[-2], trend.iloc[-1]
+    if not old["metric_ton"] > 0:
+        return None
+    old_price = old["fob_usd"] / old["metric_ton"]
+    new_price = new["fob_usd"] / new["metric_ton"] if new["metric_ton"] > 0 else old_price
+    volume_effect = (new["metric_ton"] - old["metric_ton"]) * old_price
+    return {
+        "previous": float(old["fob_usd"]),
+        "volume_effect": float(volume_effect),
+        "price_effect": float(new["fob_usd"] - old["fob_usd"] - volume_effect),
+        "latest": float(new["fob_usd"]),
+        "old_price": float(old_price),
+        "new_price": float(new_price),
+        "previous_start": old["period_start"],
+        "previous_end": old["period_end"],
+        "latest_start": new["period_start"],
+        "latest_end": new["period_end"],
+    }
+
+
+# what a row of the movers / price maps can be: a destination level, or a
+# product level (for a single-country scope, where "which country" is moot)
+_GROUP_COLUMNS = {
+    **{level: col for level, col in GEO_LEVELS.items() if col},
+    **{level: col for level, col in PRODUCT_LEVELS.items() if col},
+}
+
+
+def _check_rows(rows: str) -> None:
+    if rows not in _GROUP_COLUMNS:
+        raise ValueError(f"rows must be one of {sorted(_GROUP_COLUMNS)}, not {rows!r}")
+
+
+def _destination_periods(
+    con: duckdb.DuckDBPyConnection,
+    rows: str,
+    product_level: str,
+    product_value: str | None,
+    geo_level: str,
+    geo_value: str | None,
+) -> pd.DataFrame:
+    """Value and tons per destination (or product - see _GROUP_COLUMNS),
+    latest 12 months and the 12 before."""
+    _check_rows(rows)
+    filter_sql, params = level_filters(product_level, product_value, geo_level, geo_value)
+    return con.execute(
+        f"""
+        SELECT
+            {_GROUP_COLUMNS[rows]}                                       AS destination,
+            coalesce(sum(fob_usd) FILTER (WHERE periods_ago = 0), 0)     AS fob_usd,
+            coalesce(sum(fob_usd) FILTER (WHERE periods_ago = 1), 0)     AS prev_fob_usd,
+            coalesce(sum(metric_ton) FILTER (WHERE periods_ago = 0), 0)  AS metric_ton,
+            coalesce(sum(metric_ton) FILTER (WHERE periods_ago = 1), 0)  AS prev_metric_ton
+        FROM ({_PERIODIZED_SQL})
+        WHERE periods_ago <= 1 AND {_GROUP_COLUMNS[rows]} IS NOT NULL
+            {filter_sql}
+        GROUP BY destination
+        """,
+        [latest_month_index(con), *params],
+    ).df()
+
+
+def destination_movers(
+    con: duckdb.DuckDBPyConnection,
+    *,
+    product_level: str = "overall",
+    product_value: str | None = None,
+    geo_level: str = "overall",
+    geo_value: str | None = None,
+    rows: str = "country",
+    top_n: int = 6,
+) -> pd.DataFrame:
+    """Which destinations drove the change: the top_n biggest gains and the
+    top_n biggest losses in value, latest 12 months vs the 12 before.
+
+    Returns destination, fob_usd, prev_fob_usd, change (USD), change_pct
+    (NaN for a new buyer); gains first (largest first), then losses
+    (largest first).
+    """
+    df = _destination_periods(con, rows, product_level, product_value, geo_level, geo_value)
+    df["change"] = df["fob_usd"] - df["prev_fob_usd"]
+    df["change_pct"] = _growth(df["fob_usd"], df["prev_fob_usd"])
+    gains = df[df["change"] > 0].nlargest(top_n, "change")
+    losses = df[df["change"] < 0].nsmallest(top_n, "change")
+    return pd.concat([gains, losses]).reset_index(drop=True)[
+        ["destination", "fob_usd", "prev_fob_usd", "change", "change_pct"]
+    ]
+
+
+def price_volume_map(
+    con: duckdb.DuckDBPyConnection,
+    *,
+    product_level: str = "overall",
+    product_value: str | None = None,
+    geo_level: str = "overall",
+    geo_value: str | None = None,
+    rows: str = "country",
+    top_n: int = 20,
+) -> pd.DataFrame:
+    """Premium vs bulk buyers: the top_n destinations by value over the
+    latest 12 months, with their volume and average price.
+
+    Returns destination, fob_usd, metric_ton, unit_price_usd_per_ton,
+    price_yoy_pct, price_vs_average (their $/t over the whole scope's $/t:
+    1.2 = pays 20% above average), largest first.
+    """
+    df = _destination_periods(con, rows, product_level, product_value, geo_level, geo_value)
+    total_tons = df["metric_ton"].sum()
+    average = df["fob_usd"].sum() / total_tons if total_tons > 0 else float("nan")
+    df = df[(df["fob_usd"] > 0) & (df["metric_ton"] > 0)].nlargest(top_n, "fob_usd")
+    price = df["fob_usd"] / df["metric_ton"]
+    prev_price = df["prev_fob_usd"] / df["prev_metric_ton"].where(df["prev_metric_ton"] > 0)
+    return df.assign(
+        unit_price_usd_per_ton=price,
+        price_yoy_pct=_growth(price, prev_price),
+        price_vs_average=price / average,
+    ).reset_index(drop=True)[
+        [
+            "destination",
+            "fob_usd",
+            "metric_ton",
+            "unit_price_usd_per_ton",
+            "price_yoy_pct",
+            "price_vs_average",
+        ]
+    ]
+
+
+def concentration_trend(
+    con: duckdb.DuckDBPyConnection,
+    *,
+    product_level: str = "overall",
+    product_value: str | None = None,
+    geo_level: str = "overall",
+    geo_value: str | None = None,
+    rows: str = "country",
+    window_years: int = 10,
+) -> pd.DataFrame:
+    """How dependent the trade is on its biggest buyers, period by period:
+    the top buyer's and the top 5's share of value.
+
+    Returns one row per 12-month period with any trade, oldest first:
+    period_start, period_end, periods_ago, top_destination, top1_share,
+    top5_share, destinations (buyers in that period).
+    """
+    _check_rows(rows)
+    filter_sql, params = level_filters(product_level, product_value, geo_level, geo_value)
+    latest_idx = latest_month_index(con)
+    df = con.execute(
+        f"""
+        WITH per_destination AS (
+            SELECT periods_ago, {_GROUP_COLUMNS[rows]} AS destination, sum(fob_usd) AS fob_usd
+            FROM ({_PERIODIZED_SQL})
+            WHERE periods_ago < ? AND {_GROUP_COLUMNS[rows]} IS NOT NULL
+                {filter_sql}
+            GROUP BY ALL
+            HAVING sum(fob_usd) > 0
+        ),
+        ranked AS (
+            SELECT *,
+                row_number() OVER (PARTITION BY periods_ago ORDER BY fob_usd DESC, destination)
+                    AS rnk,
+                sum(fob_usd) OVER (PARTITION BY periods_ago) AS period_total
+            FROM per_destination
+        )
+        SELECT
+            periods_ago,
+            any_value(destination) FILTER (WHERE rnk = 1)                  AS top_destination,
+            sum(fob_usd) FILTER (WHERE rnk = 1) / any_value(period_total)  AS top1_share,
+            sum(fob_usd) FILTER (WHERE rnk <= 5) / any_value(period_total) AS top5_share,
+            count(*)                                                       AS destinations
+        FROM ranked
+        GROUP BY periods_ago
+        ORDER BY periods_ago DESC
+        """,
+        [latest_idx, window_years, *params],
+    ).df()
+    return add_period_bounds(df, latest_idx)[
+        [
+            "period_start",
+            "period_end",
+            "periods_ago",
+            "top_destination",
+            "top1_share",
+            "top5_share",
+            "destinations",
+        ]
+    ]

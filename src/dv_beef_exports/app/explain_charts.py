@@ -26,19 +26,25 @@ import altair as alt
 import pandas as pd
 
 from dv_beef_exports.app.common import (
+    BLUE,
+    BLUE_LIGHT,
     CHART_INK,
     CHART_MUTED,
+    DOWN,
+    GREY,
     MONEY_AXIS_LABELS,
+    ORANGE,
     TONS_AXIS_LABELS,
+    UP,
     capitalize,
     period_label,
 )
 from dv_beef_exports.app.explanations import money, tons
 
-HIGHLIGHT = "#2a78d6"  # the selected result
-PEER = "#cfcdc6"  # everything else
-UP, DOWN = "#2a78d6", "#e34948"  # diverging pair: growth vs decline
-EMPHASIS = "#eb6834"  # the one bar the story is about (weakest evidence)
+HIGHLIGHT = BLUE  # the selected result
+PEER = GREY  # everything else
+# UP/DOWN (from common): blue growth vs orange decline - colour-blind safe
+EMPHASIS = ORANGE  # the one bar the story is about (weakest evidence)
 HEIGHT = 220
 TOP_N = 10
 
@@ -204,7 +210,7 @@ def growth_context(history: pd.DataFrame) -> alt.Chart | None:
         .properties(
             title=_title(
                 "Change vs. the previous 12 months",
-                "Each bar: one 12-month period against the one before (blue up, red down)",
+                "Each bar: one 12-month period against the one before (blue up, orange down)",
             ),
             height=HEIGHT,
         )
@@ -321,7 +327,7 @@ def coverage_context(history: pd.DataFrame) -> alt.Chart:
             color=alt.Color(
                 "state:N",
                 scale=alt.Scale(
-                    domain=[_COUNTED, _TOO_SMALL, _NONE], range=[HIGHLIGHT, "#9ec5f4", PEER]
+                    domain=[_COUNTED, _TOO_SMALL, _NONE], range=[HIGHLIGHT, BLUE_LIGHT, PEER]
                 ),
                 legend=alt.Legend(title=None, orient="top", direction="horizontal", labelLimit=0),
             ),

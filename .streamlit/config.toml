@@ -1,5 +1,30 @@
-# The app's charts and HTML table are styled for a light background; without
+# The app's charts and HTML tables are styled for a light background; without
 # this, a phone in dark mode would get light-styled charts on a dark page.
 [theme]
 base = "light"
-primaryColor = "#2a78d6"
+font = "Roboto:https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap"
+codeFont = "'Roboto Mono':https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500&display=swap"
+baseFontSize = 15
+headingFontWeights = [700, 600, 600, 500, 500, 500]
+headingFontSizes = ["2.1rem", "1.45rem", "1.15rem", "1rem", "0.9rem", "0.8rem"]
+
+primaryColor = "#1c5cab"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f3f5f8"
+textColor = "#1a1c1e"
+borderColor = "#e3e6eb"
+linkColor = "#1c5cab"
+linkUnderline = false
+baseRadius = "10px"
+buttonRadius = "8px"
+showWidgetBorder = false
+
+dataframeHeaderBackgroundColor = "#f3f5f8"
+dataframeBorderColor = "#e3e6eb"
+
+# Colour-blind safe: blue/orange is the up/down pair everywhere (validated with
+# the dataviz skill's checker, CVD dE 24.7). Never green/red for good/bad.
+blueColor = "#1c5cab"
+orangeColor = "#c4521f"
+chartCategoricalColors = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
+chartSequentialColors = ["#cde2fb", "#b7d3f6", "#9ec5f4", "#6da7ec", "#5598e7", "#3987e5", "#2a78d6", "#256abf", "#184f95", "#0d366b"]

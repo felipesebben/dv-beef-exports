@@ -21,6 +21,7 @@ from dv_beef_exports.app.common import (
     connection,
     display_name,
     geo_label,
+    page_header,
     product_phrase,
     product_scope_options,
     query_summary,
@@ -166,10 +167,11 @@ def _charts_for(key: str, ctx: dict) -> tuple[alt.TopLevelMixin | None, alt.TopL
     raise ValueError(f"no charts for {key!r}")
 
 
-st.title("Explain the numbers")
-st.caption(
+page_header(
+    "Ranking, explained",
+    "Explain the numbers",
     "Every number behind one result, in plain language: what it says for this market, what "
-    "to do about it, and how it compares with the rest."
+    "to do about it, and how it compares with the rest.",
 )
 query = st.session_state.query
 st.caption(query_summary(query))

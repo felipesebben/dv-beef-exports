@@ -20,6 +20,7 @@ from dv_beef_exports.app.common import (
     SUPPLIERS_PRODUCT_KEY,
     connection,
     geo_options,
+    page_header,
     product_phrase,
     product_scope_options,
     style_chart,
@@ -65,10 +66,11 @@ def _plants_table(plants: pd.DataFrame, listed: bool) -> pd.DataFrame:
     return table
 
 
-st.title("Find suppliers")
-st.caption(
+page_header(
+    "Sourcing",
+    "Find suppliers",
     "You have a market and a product: which Brazilian states ship it there today, and which "
-    "plants MAPA has approved to export it there."
+    "plants MAPA has approved to export it there.",
 )
 
 con = connection()
