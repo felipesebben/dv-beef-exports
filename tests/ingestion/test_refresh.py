@@ -179,3 +179,15 @@ def test_main_writes_github_outputs_and_exits_nonzero_on_failure(
     fake.rows[(2026, 10)] = [("China", 100)]
     fake.total_override[(2026, 10)] = 1
     assert main([]) == 1
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "expected"),
+    [
+        (150, 100, "-33.3333%"),
+        (1_102_570_131, 1_102_586_981, "+0.0015%"),  # the real Aug 2026 revision
+        (0, 100, "new"),
+    ],
+)
+def test_revision_change_reads_as_a_percentage(before, after, expected) -> None:
+    assert refresh._change_pct(before, after) == expected

@@ -214,7 +214,8 @@ def _change_pct(before: float, after: float) -> str:
     if not before:
         return "new"
     change = (after - before) / before
-    return f"{change:+.4%}" if abs(change) >= 0.0001 else f"{change:+.2e}"
+    # below 0.01%, two significant figures ("+0.0015%"), never scientific notation
+    return f"{change:+.4%}" if abs(change) >= 0.0001 else f"{change * 100:+.2g}%"
 
 
 def summary_markdown(result: RefreshResult) -> str:
