@@ -408,3 +408,19 @@ something worth remembering (see `docs/WORKFLOW.md`).
   and silently drops inline `<svg>`. They now ship as a data-URI `<img>`
   (with a tooltip saying how to read them), scaled to their own range so a
   10% price move doesn't read as a flat line.
+
+## 2026-10-28 — Sign-in, and dots on the sparklines
+- The app is no longer open to anyone with the link:
+  - Google sign-in (OpenID Connect, Streamlit's `st.login`) plus an allowlist
+    of e-mails and exact company domains, in Streamlit secrets
+    (`app/auth.py`);
+  - no passwords exist anywhere, and unverified Google e-mails are refused;
+  - it **fails closed**: without the settings, nobody gets in.
+  Chosen over a shared password (the weakest option) and paired with
+  Community Cloud's private sharing as a second lock. Setup steps are in
+  `docs/DEPLOY.md`. The data stays public in the repo; this protects the app.
+- `DV_BEEF_EXPORTS_AUTH=off` switches the gate off for local development and
+  tests only.
+- The KPI sparklines got a dot per month, the latest larger. They are drawn as
+  non-scaling strokes, so they stay round however wide the card stretches the
+  image.

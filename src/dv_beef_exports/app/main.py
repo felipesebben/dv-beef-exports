@@ -32,6 +32,7 @@ if _SRC not in sys.path:
 
 import streamlit as st  # noqa: E402
 
+from dv_beef_exports.app.auth import require_login, signed_in_as  # noqa: E402
 from dv_beef_exports.app.common import (  # noqa: E402
     apply_style,
     connection,
@@ -44,6 +45,8 @@ st.set_page_config(
     page_title="Beef export opportunities", page_icon=":material/public:", layout="wide"
 )
 apply_style()
+# nothing below runs for a visitor who isn't signed in and allowed (app/auth.py)
+require_login()
 
 overview = st.Page(
     "app_pages/overview.py",
@@ -80,6 +83,10 @@ if page.title in (opportunities.title, explain.title):
     st.session_state.result = run_query(con, query)
 
 page.run()
+if email := signed_in_as():
+    with st.container(horizontal=True, vertical_alignment="center"):
+        st.caption(f"Signed in as {email}")
+        st.button("Sign out", icon=":material/logout:", type="tertiary", on_click=st.logout)
 footer(
     "Sources: ComexStat (MDIC) export statistics and MAPA's SIGSIF open data, refreshed "
     'weekly. A number looks wrong? <a href="https://github.com/felipesebben/dv-beef-exports'
