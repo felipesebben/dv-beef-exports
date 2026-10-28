@@ -424,3 +424,9 @@ something worth remembering (see `docs/WORKFLOW.md`).
 - The KPI sparklines got a dot per month, the latest larger. They are drawn as
   non-scaling strokes, so they stay round however wide the card stretches the
   image.
+- Follow-up (same day): the team just needs "log in with your e-mail", which
+  Streamlit Community Cloud's sharing list already does (invited e-mails get a
+  one-time sign-in link, any provider, including company Microsoft
+  addresses). So with no sign-in settings the app now relies on that list
+  instead of staying closed. The Google sign-in is an optional extra lock that
+  switches on when its settings exist, and stays fail-closed if half set up.

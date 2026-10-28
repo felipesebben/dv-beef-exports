@@ -1,11 +1,14 @@
 """
-Who may use the app: Google sign-in (OpenID Connect, Streamlit's st.login)
-plus an allowlist of e-mails and/or company domains. No passwords exist
-anywhere - Google proves who the person is (with its own 2-step
-verification and brute-force protection), and the allowlist decides whether
-that person may come in.
+Who may use the app. Two levels (docs/DEPLOY.md, "Sign-in"):
 
-Configuration lives in Streamlit secrets, never in git (`docs/DEPLOY.md`):
+1. **Default: Streamlit Community Cloud's sharing list.** With no sign-in
+   settings in the app's secrets, the app relies on Settings -> Sharing ->
+   "Only specific people can view this app": Streamlit itself asks visitors
+   to sign in with their e-mail (a one-time link, or Google) and blocks
+   anyone not invited before this code runs. Nothing to configure here.
+2. **Optional extra lock: Google sign-in in the app** (OpenID Connect,
+   st.login) plus this app's own allowlist of e-mails and/or company
+   domains. It switches on as soon as an [auth] section is in the secrets:
 
     [auth]                      # Streamlit's own OIDC settings
     redirect_uri = "https://<app>.streamlit.app/oauth2callback"
@@ -19,9 +22,9 @@ Configuration lives in Streamlit secrets, never in git (`docs/DEPLOY.md`):
     allowed_emails = ["someone@example.com"]
     allowed_domains = ["sebbeninternational.com.br"]
 
-Fails closed: with no [auth] or no allowlist configured, nobody gets in.
-For local development and tests only, DV_BEEF_EXPORTS_AUTH=off switches the
-gate off (never set it on a deployed app).
+Once [auth] is present the gate fails closed: a missing provider or an empty
+allowlist lets nobody in. DV_BEEF_EXPORTS_AUTH=off switches the in-app gate
+off (local development and tests).
 
 The data itself is public (committed to a public repo); this protects the
 app - its analysis and supplier pages - not the raw numbers.
@@ -42,7 +45,8 @@ AUTH_OFF_ENV = "DV_BEEF_EXPORTS_AUTH"
 
 
 class Access(Enum):
-    MISCONFIGURED = "misconfigured"  # fail closed
+    PLATFORM = "platform"  # no in-app sign-in configured: the sharing list is the lock
+    MISCONFIGURED = "misconfigured"  # in-app sign-in half set up: fail closed
     SIGN_IN = "sign_in"  # not signed in yet
     DENIED = "denied"  # signed in, not on the allowlist (or e-mail unverified)
     GRANTED = "granted"
@@ -75,7 +79,9 @@ def decide(
     signed-in user's claims - so every path is unit-tested."""
     auth = secrets.get("auth") if hasattr(secrets, "get") else None
     access = secrets.get("access") if hasattr(secrets, "get") else None
-    if not auth or PROVIDER not in auth or not access:
+    if not auth:
+        return Access.PLATFORM
+    if PROVIDER not in auth or not access:
         return Access.MISCONFIGURED
     emails, domains = access.get("allowed_emails", []), access.get("allowed_domains", [])
     if not _normalise(emails) and not _normalise(domains):
@@ -102,7 +108,7 @@ def require_login() -> None:
         return
     # .get: st.user only has is_logged_in once [auth] is configured
     decision = decide(_secrets(), bool(st.user.get("is_logged_in", False)), st.user.to_dict())
-    if decision is Access.GRANTED:
+    if decision in (Access.GRANTED, Access.PLATFORM):
         return
     page_header(
         "Beef export intelligence",
@@ -113,8 +119,8 @@ def require_login() -> None:
     with card("signin"):
         if decision is Access.MISCONFIGURED:
             note(
-                "Sign-in isn't set up for this app yet, so it stays closed. An administrator "
-                "needs to add the login settings (see docs/DEPLOY.md)."
+                "The in-app sign-in is only half set up, so the app stays closed. An "
+                "administrator needs to finish the login settings (see docs/DEPLOY.md)."
             )
         elif decision is Access.SIGN_IN:
             st.button(

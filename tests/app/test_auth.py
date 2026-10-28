@@ -67,17 +67,22 @@ def test_access_needs_a_verified_allowed_google_account() -> None:
     assert decide(SECRETS, False, {}) is Access.SIGN_IN
 
 
+def test_without_sign_in_settings_the_sharing_list_is_the_lock() -> None:
+    """No [auth]: the app relies on Community Cloud's "only specific people"
+    sharing, which blocks uninvited visitors before the app runs."""
+    assert decide({}, False, {}) is Access.PLATFORM
+    assert decide({"access": SECRETS["access"]}, False, {}) is Access.PLATFORM
+
+
 @pytest.mark.parametrize(
     "secrets",
     [
-        {},  # no secrets at all
-        {"access": SECRETS["access"]},  # no [auth]
         {"auth": {"redirect_uri": "x"}, "access": SECRETS["access"]},  # no Google provider
         {"auth": SECRETS["auth"]},  # no allowlist
         {"auth": SECRETS["auth"], "access": {"allowed_emails": [], "allowed_domains": [" "]}},
     ],
 )
-def test_the_gate_fails_closed_when_misconfigured(secrets) -> None:
+def test_a_half_configured_sign_in_fails_closed(secrets) -> None:
     # even a "signed-in" visitor gets nothing while the setup is incomplete
     assert decide(secrets, True, _user("ana@sebbeninternational.com.br")) is Access.MISCONFIGURED
 
@@ -95,13 +100,20 @@ def _shows_data(at: AppTest) -> bool:
     return any(t.value == "Market overview" for t in at.title) or bool(at.dataframe)
 
 
-def test_the_app_stays_closed_without_login_settings(monkeypatch) -> None:
+def test_without_sign_in_settings_the_app_opens_behind_the_sharing_list(monkeypatch) -> None:
     at = _app(monkeypatch, None)
+
+    assert not at.exception
+    assert _shows_data(at)
+
+
+def test_a_half_configured_app_stays_closed(monkeypatch) -> None:
+    at = _app(monkeypatch, {"auth": {"redirect_uri": "x"}, "access": SECRETS["access"]})
 
     assert not at.exception
     assert not _shows_data(at)
     html = " ".join(e.proto.body for e in at.get("html"))
-    assert "set up for this app yet, so it stays closed" in html
+    assert "only half set up, so the app stays closed" in html
 
 
 def test_a_visitor_sees_only_the_sign_in_button(monkeypatch) -> None:

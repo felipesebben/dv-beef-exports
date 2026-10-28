@@ -25,22 +25,31 @@ without the package installed, started from another directory.
 
 ## Sign-in (who can use the app)
 
-Two locks, on purpose:
+**The default, and all most setups need: Community Cloud's sharing list.**
 
-1. **In the app: Google sign-in plus an allowlist** (`app/auth.py`).
-   - Visitors sign in with Google (OpenID Connect, Streamlit's `st.login`);
-     no passwords exist anywhere.
-   - Only verified e-mails on the allowlist, or on an allowed company
-     domain, get in.
-   - Without the settings below the app **stays closed** (fails closed).
-2. **On the platform: Community Cloud private sharing.**
-   - In the app's **Settings -> Sharing**, choose **Only specific people can
-     view this app** and invite the same people.
-   - Streamlit then blocks anyone uninvited before the app even runs.
-   - The free tier allows one private app.
+1. On share.streamlit.io, open the app's **Settings -> Sharing**.
+2. Choose **Only specific people can view this app**.
+3. Invite each person by e-mail. Any address works, including company Microsoft
+   addresses.
 
-The data itself is public: it's committed to this public repo. These locks
-protect the app (its analysis and supplier pages), not the raw numbers.
+Invited people sign in with Google, or with a one-time link Streamlit e-mails them. No
+passwords exist, and there's nothing to configure in the app. Streamlit blocks anyone
+not invited before the app even runs. The free tier allows one private app.
+
+The app knows nothing about this list. With no sign-in settings in its secrets
+(`app/auth.py` returns `PLATFORM`), it trusts that Streamlit only lets invited people
+through. So **keep Sharing on "Only specific people"**: if it were set to public, the
+app would be open.
+
+The data itself is public: it's committed to this public repo. The sign-in protects the
+app (its analysis and supplier pages), not the raw numbers.
+
+### Optional extra lock: Google sign-in inside the app
+
+For a second, in-app check (Google sign-in plus this app's own allowlist of e-mails and
+company domains), add an `[auth]` section to the app's secrets as below. It switches on
+by itself. If it's only half set up (no Google settings, or an empty allowlist), the app
+stays closed until it's fixed.
 
 ### One-time setup: a Google OAuth client
 
@@ -85,15 +94,15 @@ with placeholders lives in the repo.
 
 ### Running locally
 
-The app is closed without settings, so for local development switch the gate off:
+Locally there are no secrets, so the in-app gate is off anyway; to be explicit (and
+the way the tests run it):
 
 ```bash
 DV_BEEF_EXPORTS_AUTH=off uv run streamlit run src/dv_beef_exports/app/main.py
 ```
 
-(PowerShell: `$env:DV_BEEF_EXPORTS_AUTH = "off"` first.) The tests do the same
-(`tests/app/conftest.py`). **Never set it on the deployed app.** To test the real
-sign-in locally instead, copy the example to `.streamlit/secrets.toml` with real values.
+(PowerShell: `$env:DV_BEEF_EXPORTS_AUTH = "off"` first.) To test the optional Google
+sign-in locally, copy the example to `.streamlit/secrets.toml` with real values.
 
 ## After a deploy: if a page shows an ImportError, reboot
 
