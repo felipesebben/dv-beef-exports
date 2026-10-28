@@ -247,15 +247,17 @@ def monthly_comparison(
     earlier - seasonality and momentum that 12-month totals smooth away.
 
     Returns 12 rows, oldest first: month (first day of the month), fob_usd,
-    metric_ton, prev_fob_usd, prev_metric_ton (the same month a year
-    earlier), fob_yoy_pct (NaN when that month had nothing).
+    metric_ton, destinations (countries buying that month), and the same
+    three a year earlier (prev_fob_usd, prev_metric_ton, prev_destinations),
+    fob_yoy_pct (NaN when that month had nothing).
     """
     filter_sql, params = level_filters(product_level, product_value, geo_level, geo_value)
     latest_idx = latest_month_index(con)
     monthly = con.execute(
         f"""
         SELECT year * 12 + month - 1 AS idx, sum(fob_usd) AS fob_usd,
-               sum(metric_ton) AS metric_ton
+               sum(metric_ton) AS metric_ton,
+               count(DISTINCT country) FILTER (WHERE fob_usd > 0) AS destinations
         FROM marts.exports
         WHERE year * 12 + month - 1 > ? - 24
             {filter_sql}
@@ -281,6 +283,12 @@ def monthly_comparison(
             ],
             "prev_metric_ton": [
                 value(i - 12, "metric_ton") for i in range(latest_idx - 11, latest_idx + 1)
+            ],
+            "destinations": [
+                value(i, "destinations") for i in range(latest_idx - 11, latest_idx + 1)
+            ],
+            "prev_destinations": [
+                value(i - 12, "destinations") for i in range(latest_idx - 11, latest_idx + 1)
             ],
         }
     )

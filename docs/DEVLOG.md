@@ -383,3 +383,24 @@ something worth remembering (see `docs/WORKFLOW.md`).
   - dependency on the biggest buyer (China 49%, down from 56%).
   With one country picked, those sections break down by product instead.
 - `money()` drops the decimal from $100M up ("$930M", not "$930.0M").
+
+## 2026-10-28 — The Sebben design system
+- The app now looks and reads like the company's other product (the
+  `dw-unify-databases` dashboards), following its `design-system` skill:
+  - cream page, forest chrome and the Sebben logo;
+  - Fraunces page titles, Inter Tight everywhere else, nothing under 14px
+    (charts included);
+  - an eyebrow carrying the data date on every page;
+  - one card per subject, with a one-line subtitle and a headline sentence
+    of real values above each chart;
+  - KPI cards with a ▲/▼ comparison and a sparkline of the last 12 months
+    over the same months a year earlier;
+  - chart titles that carry the unit, legends top right, left-aligned bar
+    labels, time-series values on the right axis;
+  - 40px table rows and a footer to report a wrong number.
+- Kept: English copy (decided with Felipe), and the validated data palette -
+  the design system's slot 1/2 are the same blue and orange we already used
+  for growth vs decline.
+- `app/design.py` holds it all; `docs/design-system.md` maps each rule to
+  where it lives. Vega can anchor a top legend to the right, Altair's schema
+  can't, so `show_chart()` adds that to the compiled spec.

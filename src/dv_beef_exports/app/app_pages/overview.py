@@ -7,6 +7,7 @@ query (a ranking query) doesn't apply here.
 
 from __future__ import annotations
 
+from datetime import date
 from html import escape
 
 import altair as alt
@@ -22,31 +23,40 @@ from dv_beef_exports.analysis.market_overview import (
     price_volume_map,
     top_destinations_matrix,
 )
+from dv_beef_exports.analysis.opportunity_scoring import latest_period_end
 from dv_beef_exports.app import overview_charts as charts
 from dv_beef_exports.app.common import (
-    BLUE_DARK,
-    BLUE_LIGHT,
+    BLUE,
     CHART_INK,
+    GREY,
+    INK,
     MONEY_AXIS_LABELS,
-    ORANGE,
     TONS_AXIS_LABELS,
+    card,
+    card_header,
     connection,
     display_name,
     geo_label,
+    headline,
     market_scope_options,
+    note,
     page_header,
     period_label,
     product_phrase,
     product_scope_options,
-    section,
-    style_chart,
+    show_chart,
+    time_axis_right,
 )
+from dv_beef_exports.app.design import comparison_text, kpi_grid_html
 from dv_beef_exports.app.explanations import (
     bridge_note,
     concentration_note,
     dependency_note,
     money,
+    monthly_note,
+    movers_note,
     overview_summary,
+    price_note,
     tons,
 )
 
@@ -92,6 +102,12 @@ _AXIS_LABELS = {
     "metric_ton": TONS_AXIS_LABELS,
     "unit_price_usd_per_ton": "format(datum.value, '$,.0f')",
 }
+_TREND_TITLES = {
+    "Value (USD)": "Value per 12-month period (US$)",
+    "Volume (tons)": "Volume per 12-month period (t)",
+    "Average price ($/t)": "Average price per 12-month period (US$/t)",
+    "Destinations": "Countries buying, per 12-month period",
+}
 _ROWS = {"Countries": ("country", "country"), "Regions": ("region", "region")}
 _ROWS["Trade blocs"] = ("trade_bloc", "trade bloc")
 _COLUMNS = {"Products": "ncm_code", "Categories": "category"}
@@ -109,67 +125,79 @@ def _period_label(df: pd.DataFrame) -> list[str]:
     ]
 
 
-def _delta_color(change: float) -> str:
-    """Blue up, orange down - colour-blind safe, never green/red. The arrow
-    still shows the direction."""
-    return "gray" if pd.isna(change) or change == 0 else ("blue" if change > 0 else "orange")
-
-
-def _kpis(trend: pd.DataFrame) -> None:
-    """Four tiles, each with its 10-period sparkline."""
+def _kpis(trend: pd.DataFrame, monthly: pd.DataFrame) -> None:
+    """Four KPI cards (design system): the number in ink, a short comparison
+    line with the exact periods in its tooltip, and a sparkline of the last
+    12 months over the same months a year earlier."""
     latest, previous = trend.iloc[-1], trend.iloc[-2]
-
-    def delta(yoy: float) -> str | None:
-        return None if pd.isna(yoy) else f"{yoy * 100:+.1f}% year on year"
-
-    def spark(column: str) -> list[float]:
-        return trend[column].fillna(0).round(2).tolist()
-
+    compared = (
+        f"{period_label(latest['period_start'], latest['period_end'])} vs "
+        f"{period_label(previous['period_start'], previous['period_end'])}"
+    )
+    basis = "a year earlier"
+    price = monthly["fob_usd"] / monthly["metric_ton"].where(monthly["metric_ton"] > 0)
+    prev_price = monthly["prev_fob_usd"] / monthly["prev_metric_ton"].where(
+        monthly["prev_metric_ton"] > 0
+    )
     destinations_change = latest["destinations"] - previous["destinations"]
-    with st.container(horizontal=True, key="kpis"):
-        st.metric(
-            "Value, last 12 months",
-            money(latest["fob_usd"]),
-            delta(latest["fob_yoy_pct"]),
-            delta_color=_delta_color(latest["fob_yoy_pct"]),
-            chart_data=spark("fob_usd"),
-            chart_type="area",
-            border=True,
-            help="Total FOB value of Brazil's exports in scope, latest 12-month period. "
-            "The sparkline shows the last 10 periods.",
-        )
-        st.metric(
-            "Volume, last 12 months",
-            tons(latest["metric_ton"]),
-            delta(latest["ton_yoy_pct"]),
-            delta_color=_delta_color(latest["ton_yoy_pct"]),
-            chart_data=spark("metric_ton"),
-            chart_type="area",
-            border=True,
-            help="Total weight shipped, latest 12-month period.",
-        )
-        st.metric(
-            "Average price",
-            "—"
+    cards = [
+        {
+            "title": "Value, last 12 months",
+            "value": money(latest["fob_usd"]),
+            "compare": comparison_text(latest["fob_yoy_pct"], basis),
+            "compare_title": compared,
+            "spark": (
+                monthly["fob_usd"].tolist(),
+                monthly["prev_fob_usd"].tolist(),
+                "Value per month, last 12 months over the same months a year earlier",
+            ),
+            "detail": "FOB, all destinations in scope",
+            "help": "Total FOB value of Brazil's exports in scope, latest 12-month period.",
+        },
+        {
+            "title": "Volume, last 12 months",
+            "value": tons(latest["metric_ton"]),
+            "compare": comparison_text(latest["ton_yoy_pct"], basis),
+            "compare_title": compared,
+            "spark": (
+                monthly["metric_ton"].tolist(),
+                monthly["prev_metric_ton"].tolist(),
+                "Tons per month, last 12 months over the same months a year earlier",
+            ),
+            "detail": "Net weight shipped",
+            "help": "Total weight shipped, latest 12-month period.",
+        },
+        {
+            "title": "Average price",
+            "value": "—"
             if pd.isna(latest["unit_price_usd_per_ton"])
             else f"${latest['unit_price_usd_per_ton']:,.0f}/t",
-            delta(latest["price_yoy_pct"]),
-            delta_color=_delta_color(latest["price_yoy_pct"]),
-            chart_data=spark("unit_price_usd_per_ton"),
-            border=True,
-            help="Total value divided by total weight - an average across every cut and "
-            "buyer in scope, so a change can mean a different mix, not just new prices.",
-        )
-        st.metric(
-            "Destinations",
-            int(latest["destinations"]),
-            f"{int(destinations_change):+d} year on year",
-            delta_color=_delta_color(destinations_change),
-            chart_data=spark("destinations"),
-            chart_type="bar",
-            border=True,
-            help="Countries that bought anything in scope in the latest 12-month period.",
-        )
+            "compare": comparison_text(latest["price_yoy_pct"], basis),
+            "compare_title": compared,
+            "spark": (
+                price.tolist(),
+                prev_price.tolist(),
+                "Average price per month, last 12 months over the same months a year earlier",
+            ),
+            "detail": "Value ÷ weight, across every cut and buyer",
+            "help": "Total value divided by total weight - a change can mean a different mix, "
+            "not just new prices.",
+        },
+        {
+            "title": "Destinations",
+            "value": f"{int(latest['destinations'])}",
+            "compare": comparison_text(destinations_change, basis, unit="count"),
+            "compare_title": compared,
+            "spark": (
+                monthly["destinations"].tolist(),
+                monthly["prev_destinations"].tolist(),
+                "Countries buying per month, last 12 months over the same months a year earlier",
+            ),
+            "detail": "Countries that bought in the 12 months",
+            "help": "Countries that bought anything in scope in the latest 12-month period.",
+        },
+    ]
+    st.html(kpi_grid_html(cards))
 
 
 def _value_label(column: str, value: float) -> str:
@@ -179,61 +207,57 @@ def _value_label(column: str, value: float) -> str:
 
 
 def _trend_chart(trend: pd.DataFrame, measure: str) -> alt.LayerChart:
-    column, title, yoy_column, fmt = _MEASURES[measure]
+    """One bar per 12-month period, from zero. Emphasis is scarce: the latest
+    period in blue and labelled, the rest in grey; the value axis on the
+    right (time series), the unit in the title."""
+    column, _, yoy_column, fmt = _MEASURES[measure]
     values = trend[column].where(trend[column] > 0)
-    # highlight the extremes only - a number on every bar goes unread
-    highlight = pd.Series(_OTHER, index=trend.index)
-    label = pd.Series("", index=trend.index)
-    if values.notna().any():
-        for idx, name in ((values.idxmin(), _LOWEST), (values.idxmax(), _HIGHEST)):
-            highlight[idx] = name
-            label[idx] = f"{name}: {_value_label(column, values[idx])}"
-    data = trend.assign(period=_period_label(trend), highlight=highlight, label=label)
+    is_latest = [i == len(trend) - 1 for i in range(len(trend))]
+    label = [
+        "" if not latest else _value_label(column, v)
+        for latest, v in zip(is_latest, values, strict=True)
+    ]
+    data = trend.assign(
+        period=_period_label(trend),
+        role=["Latest 12 months" if x else "Earlier periods" for x in is_latest],
+        label=label,
+    )
     top = values.max() if values.notna().any() else 1
     tooltip = [
         alt.Tooltip("period:N", title="Period"),
         alt.Tooltip(f"{column}:Q", title=measure, format=fmt),
     ]
     if yoy_column:
-        tooltip.append(alt.Tooltip(f"{yoy_column}:Q", title="vs previous 12 months", format="+.1%"))
+        tooltip.append(alt.Tooltip(f"{yoy_column}:Q", title="vs a year earlier", format="+.1%"))
+    axis_kwargs = {"labelExpr": _AXIS_LABELS[column]} if column in _AXIS_LABELS else {}
     base = alt.Chart(data).encode(
-        x=alt.X(
-            "period:N",
-            sort=None,
-            title="Each bar = the total for one 12-month period",
-            axis=alt.Axis(labelAngle=-40),
-        ),
+        x=alt.X("period:N", sort=None, title=None, axis=alt.Axis(labelAngle=0, labelOverlap=True)),
         # headroom above the tallest bar for its label
         y=alt.Y(
             f"{column}:Q",
-            title=title,
             scale=alt.Scale(domain=[0, top * 1.15]),
-            axis=alt.Axis(labelExpr=_AXIS_LABELS[column]) if column in _AXIS_LABELS else alt.Axis(),
+            axis=time_axis_right(**axis_kwargs),
         ),
         tooltip=tooltip,
     )
     bars = base.mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
         color=alt.Color(
-            "highlight:N",
-            scale=alt.Scale(
-                domain=[_HIGHEST, _LOWEST, _OTHER], range=[BLUE_DARK, ORANGE, BLUE_LIGHT]
-            ),
-            legend=None,  # the direct labels name the two highlighted bars
+            "role:N",
+            scale=alt.Scale(domain=["Latest 12 months", "Earlier periods"], range=[BLUE, GREY]),
+            legend=None,  # the latest bar is labelled; the title says what it is
         ),
     )
     labels = (
-        base.mark_text(dy=-9, fontSize=12, fontWeight="bold", color=CHART_INK)
+        base.mark_text(dy=-10, fontWeight=600, color=INK)
         .encode(text="label:N")
         .transform_filter(alt.datum.label != "")
     )
-    noun = _MEASURE_NOUNS[measure]
     return (bars + labels).properties(
         title=alt.TitleParams(
-            text=f"{noun[:1].upper()}{noun[1:]}, each 12-month period",
-            subtitle="Highest and lowest periods labelled",
-            anchor="start",
+            text=_TREND_TITLES[measure],
+            subtitle="Each bar is a full 12-month period; the latest in blue",
         ),
-        height=420,
+        height=360,
     )
 
 
@@ -263,25 +287,24 @@ _SHADE_HIGH = (28, 92, 171)  # #1c5cab
 _MATRIX_CSS = """
 <style>
 .bm-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch;
-  border: 1px solid #e3e6eb; border-radius: 12px; background: #ffffff;
-  box-shadow: 0 1px 2px rgba(16,24,40,.04), 0 1px 3px rgba(16,24,40,.06); }
+  border: 1px solid rgba(13,79,74,.12); border-radius: 8px; background: #faf6ef; }
 .bm { border-collapse: separate; border-spacing: 0; width: 100%;
-  font-size: 13px; font-variant-numeric: tabular-nums; }
-.bm th, .bm td { padding: 8px 12px; white-space: nowrap; text-align: right;
-  border-bottom: 1px solid #ffffff; }
-.bm thead th { color: #5b616b; font-weight: 500; font-size: 12px; white-space: normal;
-  min-width: 84px; max-width: 124px; vertical-align: bottom; text-transform: none;
-  border-bottom: 1px solid #e3e6eb; background: #f3f5f8; }
+  font: 400 14px/20px 'Inter Tight', -apple-system, 'Segoe UI', sans-serif;
+  font-variant-numeric: tabular-nums; }
+.bm th, .bm td { height: 40px; padding: 8px 12px; white-space: nowrap; text-align: right;
+  border-bottom: 1px solid rgba(13,79,74,.12); }
+.bm thead th { color: #1a1a1a; font-weight: 600; white-space: normal;
+  min-width: 96px; max-width: 132px; vertical-align: bottom; background: #ebe3d4; }
 .bm th[scope="row"], .bm th.bm-corner { position: sticky; left: 0; z-index: 1;
-  background: #ffffff; text-align: left; color: #1a1c1e; font-weight: 500;
-  border-right: 1px solid #e3e6eb; }
-.bm th.bm-corner { background: #f3f5f8; }
-.bm tbody tr:hover th[scope="row"] { color: #1c5cab; }
-.bm td.bm-empty { color: #b9bec6; }
+  background: #faf6ef; text-align: left; color: #1a1a1a; font-weight: 600;
+  border-right: 1px solid rgba(13,79,74,.12); }
+.bm th.bm-corner { background: #ebe3d4; }
+.bm tbody tr:hover th[scope="row"] { background: #ebe3d4; }
+.bm td.bm-empty { color: #6b6b6b; }
 .bm td.bm-top { font-weight: 700; }
-.bm-legend { font-size: 12px; color: #80868f; margin: 10px 2px 0; }
+.bm-legend { font: 400 14px/20px 'Inter Tight', sans-serif; color: #6b6b6b; margin: 8px 0 0; }
 .bm-swatch { display: inline-block; width: 72px; height: 8px; border-radius: 4px;
-  vertical-align: middle; margin: 0 6px;
+  vertical-align: middle; margin: 0 8px;
   background: linear-gradient(90deg, rgb(232,241,252), rgb(28,92,171)); }
 </style>
 """
@@ -351,15 +374,15 @@ def _matrix_html(
     )
 
 
+con = connection()
+end_year, end_month = latest_period_end(con)
 page_header(
-    "Brazil · beef exports",
+    f"Market overview · data to {date(end_year, end_month, 1):%b %Y}",
     "Market overview",
-    "What Brazil sells, where it goes, what drove the latest change, and who pays the most. "
-    "Every figure is a full 12-month period ending at the latest month in the data, so a "
-    "half-finished calendar year never looks like a drop.",
+    "What Brazil sells, where it goes, what drove the latest change, and who pays the most - "
+    "every figure a full 12-month period, so a half-finished year never looks like a drop.",
 )
 
-con = connection()
 with st.container(horizontal=True):
     product_scope = st.selectbox(
         "Product",
@@ -385,6 +408,7 @@ scope_args = {
     "geo_value": geo_value,
 }
 trend = market_trend(con, **scope_args)
+monthly = monthly_comparison(con, **scope_args)
 scope = (
     f"Brazil's exports of {product_phrase(product_level, product_value)} "
     f"to {geo_label(geo_level, geo_value)}"
@@ -394,116 +418,127 @@ single_country = geo_level == "country"
 by_level = "ncm_code" if single_country else "country"
 by_noun = "product" if single_country else "destination"
 
-with st.container(border=True):
-    st.markdown(_md(overview_summary(trend, scope)))
-_kpis(trend)
+st.markdown(_md(overview_summary(trend, scope)))
+_kpis(trend, monthly)
 
-section("Trend")
-measure = st.segmented_control(
-    "Show",
-    list(_MEASURES),
-    default="Value (USD)",
-    key="overview_measure",
-    persist_state="session",
-)
-st.altair_chart(style_chart(_trend_chart(trend, measure or "Value (USD)")), width="stretch")
-monthly = monthly_comparison(con, **scope_args)
-if monthly["fob_usd"].sum() > 0 or monthly["prev_fob_usd"].sum() > 0:
-    st.altair_chart(style_chart(charts.monthly_chart(monthly)), width="stretch")
+latest = trend.iloc[-1]
+with card("trend"):
+    card_header(
+        "How it's trending",
+        f"{money(latest['fob_usd'])} in the latest 12 months "
+        f"({comparison_text(latest['fob_yoy_pct'], 'a year earlier')[2:]}) · "
+        f"{len(trend)} periods shown",
+    )
+    measure = st.segmented_control(
+        "Show",
+        list(_MEASURES),
+        default="Value (USD)",
+        key="overview_measure",
+        persist_state="session",
+    )
+    show_chart(_trend_chart(trend, measure or "Value (USD)"))
+    if monthly["fob_usd"].sum() > 0 or monthly["prev_fob_usd"].sum() > 0:
+        headline(monthly_note(monthly))
+        show_chart(charts.monthly_chart(monthly))
 
-section("What changed in the latest 12 months")
 bridge = change_bridge(trend)
 movers = destination_movers(con, rows=by_level, top_n=6, **scope_args)
 movers = movers.assign(destination=[display_name(by_level, d) for d in movers["destination"]])
-left, right = st.columns(2, gap="large")
-with left:
-    if bridge is None:
-        st.caption("Nothing shipped in the previous 12 months, so there's no change to split.")
-    else:
-        st.altair_chart(style_chart(charts.bridge_chart(bridge)), width="stretch")
-        st.caption(_md(bridge_note(bridge)))
-with right:
-    if movers.empty:
-        st.caption("No change to show.")
-    else:
-        st.altair_chart(style_chart(charts.movers_chart(movers, by_noun)), width="stretch")
+with card("change"):
+    card_header(
+        "What changed in the latest 12 months",
+        "Value against the 12 months before: what moved it, and who",
+    )
+    left, right = st.columns(2, gap="large")
+    with left:
+        if bridge is None:
+            note("Nothing shipped in the previous 12 months, so there's no change to split.")
+        else:
+            headline(bridge_note(bridge))
+            show_chart(charts.bridge_chart(bridge))
+    with right:
+        if movers.empty:
+            note("No change to show.")
+        else:
+            headline(movers_note(movers, by_noun))
+            show_chart(charts.movers_chart(movers, by_noun))
 
-section("Buyers: price and dependency")
 pv = price_volume_map(con, rows=by_level, top_n=20, **scope_args)
 pv = pv.assign(destination=[display_name(by_level, d) for d in pv["destination"]])
 concentration = concentration_trend(con, rows=by_level, **scope_args)
-left, right = st.columns(2, gap="large")
-with left:
-    latest_price = trend["unit_price_usd_per_ton"].iloc[-1]
-    if len(pv) < 2 or pd.isna(latest_price):
-        st.caption("Too few buyers in the latest 12 months to compare prices.")
-    else:
-        st.altair_chart(style_chart(charts.price_volume_chart(pv, latest_price)), width="stretch")
-        if single_country:
-            st.caption(
-                "Within one country this compares products - cuts differ in price by nature, "
-                "so read it as the product mix, not as buyers paying more."
-            )
-with right:
-    if concentration.empty:
-        st.caption("No trade in the window.")
-    else:
-        st.altair_chart(style_chart(charts.concentration_chart(concentration)), width="stretch")
-        st.caption(_md(dependency_note(concentration, by_noun)))
+with card("buyers"):
+    card_header(
+        "Buyers: who pays more, and how dependent we are",
+        "Latest 12 months; prices are value ÷ weight, so a different mix moves them too",
+    )
+    left, right = st.columns(2, gap="large")
+    with left:
+        latest_price = latest["unit_price_usd_per_ton"]
+        if len(pv) < 2 or pd.isna(latest_price):
+            note("Too few buyers in the latest 12 months to compare prices.")
+        else:
+            headline(price_note(pv, by_noun))
+            show_chart(charts.price_volume_chart(pv, latest_price))
+            if single_country:
+                note(
+                    "Within one country this compares products - cuts differ in price by "
+                    "nature, so read it as the product mix, not as buyers paying more."
+                )
+    with right:
+        if concentration.empty:
+            note("No trade in the window.")
+        else:
+            headline(dependency_note(concentration, by_noun))
+            show_chart(charts.concentration_chart(concentration))
 
-section("Who buys what")
-matrix_measure = measure if measure in _MATRIX_MEASURES else "Value (USD)"
-ranked_by = "volume" if matrix_measure == "Volume (tons)" else "value"
-st.caption(
-    f"The biggest destinations by {ranked_by} in the latest 12 months, showing "
-    f"**{_MEASURE_NOUNS[matrix_measure]}** (follows the measure picked above)."
-)
-if measure == "Destinations":
-    st.caption(
-        ":material/info: Each row already is one destination, so a count doesn't apply "
-        "here - showing value instead."
+with card("matrix"):
+    matrix_measure = measure if measure in _MATRIX_MEASURES else "Value (USD)"
+    ranked_by = "volume" if matrix_measure == "Volume (tons)" else "value"
+    card_header(
+        "Who buys what",
+        f"The biggest destinations by {ranked_by}, latest 12 months, showing "
+        f"{_MEASURE_NOUNS[matrix_measure]} (follows the measure picked above)",
     )
-with st.container(horizontal=True):
-    rows_choice = st.segmented_control(
-        "Destinations as",
-        list(_ROWS),
-        default="Countries",
-        key="overview_rows",
-        persist_state="session",
+    if measure == "Destinations":
+        note("Each row already is one destination, so a count doesn't apply - showing value.")
+    with st.container(horizontal=True):
+        rows_choice = st.segmented_control(
+            "Destinations as",
+            list(_ROWS),
+            default="Countries",
+            key="overview_rows",
+            persist_state="session",
+        )
+        columns_choice = st.segmented_control(
+            "Products as",
+            list(_COLUMNS),
+            default="Products",
+            key="overview_columns",
+            persist_state="session",
+        )
+        top_n = st.slider(
+            "How many destinations",
+            min_value=5,
+            max_value=25,
+            value=10,
+            key="overview_top_n",
+            persist_state="session",
+        )
+    rows_level, rows_noun = _ROWS[rows_choice or "Countries"]
+    columns_level = _COLUMNS[columns_choice or "Products"]
+    matrix = top_destinations_matrix(
+        con,
+        **scope_args,
+        rows=rows_level,
+        columns=columns_level,
+        top_n=top_n,
+        rank_by=_MATRIX_MEASURES[matrix_measure][2],
     )
-    columns_choice = st.segmented_control(
-        "Products as",
-        list(_COLUMNS),
-        default="Products",
-        key="overview_columns",
-        persist_state="session",
-    )
-    top_n = st.slider(
-        "How many destinations",
-        min_value=5,
-        max_value=25,
-        value=10,
-        key="overview_top_n",
-        persist_state="session",
-    )
-rows_level, rows_noun = _ROWS[rows_choice or "Countries"]
-columns_level = _COLUMNS[columns_choice or "Products"]
-matrix = top_destinations_matrix(
-    con,
-    product_level=product_level,
-    product_value=product_value,
-    geo_level=geo_level,
-    geo_value=geo_value,
-    rows=rows_level,
-    columns=columns_level,
-    top_n=top_n,
-    rank_by=_MATRIX_MEASURES[matrix_measure][2],
-)
-if matrix.empty:
-    st.info("No destination bought anything in scope in the latest 12 months.")
-else:
-    _, _, _, share_column, basis = _MATRIX_MEASURES[matrix_measure]
-    note = concentration_note(matrix, rows_noun, share_column=share_column, basis=basis)
-    if note:
-        st.caption(_md(f":material/pie_chart: {note}"))
-    st.html(_matrix_html(matrix, columns_level, rows_noun, matrix_measure))
+    if matrix.empty:
+        note("No destination bought anything in scope in the latest 12 months.")
+    else:
+        _, _, _, share_column, basis = _MATRIX_MEASURES[matrix_measure]
+        dominance = concentration_note(matrix, rows_noun, share_column=share_column, basis=basis)
+        if dominance:
+            headline(dominance)
+        st.html(_matrix_html(matrix, columns_level, rows_noun, matrix_measure))

@@ -35,6 +35,7 @@ import streamlit as st  # noqa: E402
 from dv_beef_exports.app.common import (  # noqa: E402
     apply_style,
     connection,
+    footer,
     run_query,
     sidebar_controls,
 )
@@ -79,3 +80,8 @@ if page.title in (opportunities.title, explain.title):
     st.session_state.result = run_query(con, query)
 
 page.run()
+footer(
+    "Sources: ComexStat (MDIC) export statistics and MAPA's SIGSIF open data, refreshed "
+    'weekly. A number looks wrong? <a href="https://github.com/felipesebben/dv-beef-exports'
+    '/issues" target="_blank">Tell us</a>.'
+)

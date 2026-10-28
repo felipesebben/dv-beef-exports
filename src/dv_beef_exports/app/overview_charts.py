@@ -23,11 +23,13 @@ from dv_beef_exports.app.common import (
     ORANGE,
     TONS_AXIS_LABELS,
     UP,
+    left_labels,
     period_label,
+    time_axis_right,
 )
 from dv_beef_exports.app.explanations import money
 
-_THIS_YEAR, _YEAR_BEFORE = "Latest 12 months", "Same month, a year earlier"
+_THIS_YEAR, _YEAR_BEFORE = "Latest 12 months", "A year earlier"
 
 
 def _title(text: str, subtitle: str | list[str] = "") -> alt.TitleParams:
@@ -58,15 +60,11 @@ def monthly_chart(monthly: pd.DataFrame) -> alt.LayerChart:
         .mark_line(strokeWidth=2.5, point=alt.OverlayMarkDef(size=36, filled=True))
         .encode(
             x=x,
-            y=alt.Y(
-                "fob_usd:Q",
-                title="Value shipped in the month (USD)",
-                axis=alt.Axis(labelExpr=MONEY_AXIS_LABELS),
-            ),
+            y=alt.Y("fob_usd:Q", axis=time_axis_right(labelExpr=MONEY_AXIS_LABELS)),
             color=alt.Color(
                 "series:N",
                 scale=colors,
-                legend=alt.Legend(orient="top", title=None, symbolType="stroke"),
+                legend=alt.Legend(title=None, symbolType="stroke"),
             ),
             # the year before sits behind
             order=alt.Order("series:N", sort="descending"),
@@ -89,8 +87,8 @@ def monthly_chart(monthly: pd.DataFrame) -> alt.LayerChart:
     )
     return (lines + hover).properties(
         title=_title(
-            "Month by month, against a year earlier",
-            "Seasonality and the latest momentum that 12-month totals smooth away",
+            "Value per month (US$), against the same month a year earlier",
+            "Seasonality and momentum that 12-month totals smooth away",
         ),
         height=300,
     )
@@ -124,11 +122,7 @@ def bridge_chart(bridge: dict) -> alt.LayerChart:
         .mark_bar(cornerRadius=4, size=56)
         .encode(
             x=x,
-            y=alt.Y(
-                "low:Q",
-                title="Value in the 12-month period (USD)",
-                axis=alt.Axis(labelExpr=MONEY_AXIS_LABELS),
-            ),
+            y=alt.Y("low:Q", title=None, axis=alt.Axis(labelExpr=MONEY_AXIS_LABELS)),
             y2="high:Q",
             color=alt.Color(
                 "kind:N",
@@ -145,16 +139,14 @@ def bridge_chart(bridge: dict) -> alt.LayerChart:
     )
     labels = (
         alt.Chart(data)
-        .mark_text(dy=-8, fontSize=12, fontWeight=500, color=INK)
+        .mark_text(dy=-10, fontWeight=600, color=INK)
         .encode(x=x, y="top:Q", text="label:N")
     )
     return (bars + labels).properties(
         title=_title(
-            "What moved the value",
-            [
-                f"Volume effect: the change in tons, at the old ${bridge['old_price']:,.0f}/t",
-                f"Price effect: the change to ${bridge['new_price']:,.0f}/t, on the new tons",
-            ],
+            "From the previous 12 months' value to the latest (US$)",
+            f"Volume at the old ${bridge['old_price']:,.0f}/t, then price, "
+            f"to ${bridge['new_price']:,.0f}/t",
         ),
         height=300,
     )
@@ -179,19 +171,19 @@ def movers_chart(movers: pd.DataFrame, destination_noun: str) -> alt.LayerChart:
             "destination:N",
             sort=order,
             title=None,
-            axis=alt.Axis(domain=False, labelLimit=170, labelColor=INK),
+            axis=alt.Axis(**left_labels(150)),
         )
     )
     bars = base.mark_bar(cornerRadiusEnd=4, height={"band": 0.66}).encode(
         x=alt.X(
             "change:Q",
-            title="Change in value vs the previous 12 months (USD)",
+            title=None,
             axis=alt.Axis(labelExpr=MONEY_AXIS_LABELS),
         ),
         color=alt.Color(
             "direction:N",
             scale=alt.Scale(domain=["Gain", "Loss"], range=[UP, DOWN]),
-            legend=alt.Legend(orient="top", title=None),
+            legend=alt.Legend(title=None),
         ),
         tooltip=[
             alt.Tooltip("destination:N", title=destination_noun.capitalize()),
@@ -200,16 +192,16 @@ def movers_chart(movers: pd.DataFrame, destination_noun: str) -> alt.LayerChart:
             alt.Tooltip("label:N", title="Change"),
         ],
     )
-    labels = base.mark_text(align="left", dx=5, fontSize=11, color=CHART_INK).encode(
+    labels = base.mark_text(align="left", dx=6, color=CHART_INK).encode(
         x="label_at:Q", text="label:N"
     )
     zero = alt.Chart(pd.DataFrame({"x": [0]})).mark_rule(color=CHART_MUTED).encode(x="x:Q")
     return (bars + zero + labels).properties(
         title=_title(
-            f"Which {destination_noun}s drove the change",
-            "Biggest gains and losses in value, latest 12 months vs the 12 before",
+            f"Change in value by {destination_noun} (US$)",
+            "Biggest gains and losses, latest 12 months vs the 12 before",
         ),
-        height=alt.Step(26),
+        height=alt.Step(30),
     )
 
 
@@ -225,13 +217,13 @@ def price_volume_chart(pv: pd.DataFrame, average_price: float, labelled: int = 5
     )
     x = alt.X(
         "metric_ton:Q",
-        title="Tons in the latest 12 months (log scale)",
+        title="Tons, latest 12 months (log scale)",
         scale=alt.Scale(type="log", nice=False, padding=16),
         axis=alt.Axis(labelExpr=TONS_AXIS_LABELS, tickCount=5, grid=False),
     )
     y = alt.Y(
         "unit_price_usd_per_ton:Q",
-        title="Average price (USD per ton)",
+        title=None,
         scale=alt.Scale(zero=False, padding=14),
         axis=alt.Axis(format="$,.0f"),
     )
@@ -251,7 +243,7 @@ def price_volume_chart(pv: pd.DataFrame, average_price: float, labelled: int = 5
                 scale=alt.Scale(
                     domain=["Pays above average", "Pays below average"], range=[BLUE, ORANGE]
                 ),
-                legend=alt.Legend(orient="top", title=None),
+                legend=alt.Legend(title=None),
             ),
             tooltip=[
                 alt.Tooltip("destination:N", title="Destination"),
@@ -265,18 +257,15 @@ def price_volume_chart(pv: pd.DataFrame, average_price: float, labelled: int = 5
     )
     names = (
         alt.Chart(data)
-        .mark_text(align="left", dx=9, dy=-7, fontSize=11, color=CHART_INK)
+        .mark_text(align="left", dx=10, dy=-8, color=CHART_INK)
         .encode(x=x, y=y, text="name:N")
     )
     reference = alt.Chart(pd.DataFrame({"y": [average_price]}))
     rule = reference.mark_rule(color=CHART_MUTED, strokeDash=[4, 4]).encode(y="y:Q")
     return (rule + dots + names).properties(
         title=_title(
-            "Premium vs bulk buyers",
-            [
-                f"Dashed line = the average price, ${average_price:,.0f}/t",
-                "Bigger dot = more value; the biggest buyers are named",
-            ],
+            "Average price (US$/t) against tons shipped",
+            f"Dashed line: the average, ${average_price:,.0f}/t; bigger dot = more value",
         ),
         height=380,
     )
@@ -304,13 +293,8 @@ def concentration_chart(concentration: pd.DataFrame) -> alt.LayerChart:
     last = data[data["period"] == labels[-1]].assign(
         text=lambda d: [f"{s} {v:.0%}" for s, v in zip(d["series"], d["share"], strict=True)]
     )
-    x = alt.X("period:N", sort=labels, title=None, axis=alt.Axis(labelAngle=-40))
-    y = alt.Y(
-        "share:Q",
-        title="Share of the value",
-        scale=alt.Scale(domain=[0, 1]),
-        axis=alt.Axis(format="%"),
-    )
+    x = alt.X("period:N", sort=labels, title=None, axis=alt.Axis(labelAngle=0, labelOverlap=True))
+    y = alt.Y("share:Q", scale=alt.Scale(domain=[0, 1]), axis=time_axis_right(format="%"))
     colors = alt.Scale(domain=["Top 5 buyers", "Top buyer"], range=[BLUE, ORANGE])
     lines = (
         alt.Chart(data)
@@ -318,7 +302,7 @@ def concentration_chart(concentration: pd.DataFrame) -> alt.LayerChart:
         .encode(
             x=x,
             y=y,
-            color=alt.Color("series:N", scale=colors, legend=alt.Legend(orient="top", title=None)),
+            color=alt.Color("series:N", scale=colors, legend=alt.Legend(title=None)),
             tooltip=[
                 alt.Tooltip("period:N", title="Period"),
                 alt.Tooltip("series:N", title=" "),
@@ -329,15 +313,13 @@ def concentration_chart(concentration: pd.DataFrame) -> alt.LayerChart:
     )
     end_labels = (
         alt.Chart(last)
-        .mark_text(align="left", dx=10, fontSize=11, fontWeight=500, color=CHART_INK)
+        .mark_text(align="right", dx=-4, dy=-14, fontWeight=600, color=INK)
         .encode(x=x, y=y, text="text:N")
     )
     return (lines + end_labels).properties(
         title=_title(
-            "How dependent on the biggest buyers",
-            "Share of the value taken by the top buyer and the top 5, each 12-month period",
+            "Share of the value taken by the biggest buyers (%)",
+            "The top buyer and the top 5, each 12-month period",
         ),
         height=300,
-        # room right of the plot for the end labels
-        padding={"left": 5, "top": 5, "bottom": 5, "right": 110},
     )

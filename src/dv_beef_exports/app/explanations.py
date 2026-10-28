@@ -802,3 +802,73 @@ def dependency_note(concentration: pd.DataFrame, noun: str) -> str:
         if latest["top1_share"] >= 0.4
         else "No single buyer dominates."
     )
+
+
+def monthly_note(monthly: pd.DataFrame) -> str:
+    """Headline for the month-by-month chart: how the last 3 months compare
+    with the same 3 months a year earlier - the momentum 12-month totals hide."""
+    recent, before = monthly["fob_usd"].iloc[-3:].sum(), monthly["prev_fob_usd"].iloc[-3:].sum()
+    first, last = monthly["month"].iloc[-3], monthly["month"].iloc[-1]
+    span = f"{first:%b}–{last:%b %Y}"
+    if not before > 0:
+        return f"{money(recent)} shipped in {span}, with nothing in the same months a year earlier."
+    change = recent / before - 1
+    direction = "above" if change >= 0 else "below"
+    return (
+        f"{span}: {money(recent)}, {abs(change):.0%} {direction} the same three months a "
+        "year earlier."
+    )
+
+
+def movers_note(movers: pd.DataFrame, noun: str) -> str:
+    """Headline for the movers chart: the biggest gain and the biggest loss."""
+    gains, losses = movers[movers["change"] > 0], movers[movers["change"] < 0]
+    parts = []
+    if len(gains):
+        g = gains.iloc[0]
+        parts.append(f"{g['destination']} gained the most ({_signed(g['change'])})")
+    if len(losses):
+        lo = losses.iloc[0]
+        parts.append(f"{lo['destination']} lost the most ({_signed(lo['change'])})")
+    return ("; ".join(parts) + ".") if parts else f"No {noun} changed."
+
+
+def _signed(usd: float) -> str:
+    return ("+" if usd >= 0 else "-") + money(abs(usd))
+
+
+def price_note(pv: pd.DataFrame, noun: str) -> str:
+    """Headline for the premium-vs-bulk chart: the biggest buyer's price
+    against the average, and the highest payer among the biggest buyers."""
+    top = pv.iloc[0]
+    text = f"{top['destination']} pays ${top['unit_price_usd_per_ton']:,.0f}/t, " + _vs_average(
+        top["price_vs_average"]
+    )
+    big = pv.head(10)
+    best = big.loc[big["price_vs_average"].idxmax()]
+    if best["destination"] != top["destination"]:
+        text += (
+            f"; among the 10 biggest {plural(noun)}, {best['destination']} pays the most "
+            f"(${best['unit_price_usd_per_ton']:,.0f}/t)"
+        )
+    return text + "."
+
+
+def _vs_average(ratio: float) -> str:
+    diff = ratio - 1
+    if abs(diff) < 0.005:
+        return "the average"
+    return f"{abs(diff):.0%} {'above' if diff > 0 else 'below'} the average"
+
+
+def ranking_note(result: pd.DataFrame) -> str:
+    """Headline for the ranking chart: who leads, by how much, and how many
+    of the top 15 are well evidenced. `result` has `name`, `opportunity_score`
+    and `confidence`."""
+    top15 = result.nlargest(15, "opportunity_score")
+    lead = top15.iloc[0]
+    solid = int((top15["confidence"] >= 0.7).sum())
+    text = f"{lead['name']} leads with {lead['opportunity_score']:.0f}"
+    if len(top15) > 1:
+        text += f", ahead of {top15.iloc[1]['name']} ({top15.iloc[1]['opportunity_score']:.0f})"
+    return f"{text}; {solid} of the top {len(top15)} are well evidenced (confidence 70%+)."

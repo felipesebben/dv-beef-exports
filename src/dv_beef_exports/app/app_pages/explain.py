@@ -7,17 +7,22 @@ charts under each metric (its context, and how it compares).
 
 from __future__ import annotations
 
+from datetime import date
+from html import escape
+
 import altair as alt
 import pandas as pd
 import streamlit as st
 
 from dv_beef_exports.analysis.market_overview import market_trend
-from dv_beef_exports.analysis.opportunity_scoring import period_history
+from dv_beef_exports.analysis.opportunity_scoring import latest_period_end, period_history
 from dv_beef_exports.app import explain_charts as charts
 from dv_beef_exports.app.common import (
     RANKED_NOUNS,
     SUPPLIERS_MARKET_KEY,
     SUPPLIERS_PRODUCT_KEY,
+    card,
+    card_header,
     connection,
     display_name,
     geo_label,
@@ -25,7 +30,7 @@ from dv_beef_exports.app.common import (
     product_phrase,
     product_scope_options,
     query_summary,
-    style_chart,
+    show_chart,
 )
 from dv_beef_exports.app.explanations import (
     Selection,
@@ -167,8 +172,9 @@ def _charts_for(key: str, ctx: dict) -> tuple[alt.TopLevelMixin | None, alt.TopL
     raise ValueError(f"no charts for {key!r}")
 
 
+end_year, end_month = latest_period_end(connection())
 page_header(
-    "Ranking, explained",
+    f"Explain the numbers · data to {date(end_year, end_month, 1):%b %Y}",
     "Explain the numbers",
     "Every number behind one result, in plain language: what it says for this market, what "
     "to do about it, and how it compares with the rest.",
@@ -215,14 +221,15 @@ context = {
     "log_scale": False,
 }
 
-with st.container(border=True):
-    st.subheader(":material/flag: Bottom line")
+with card("bottom"):
+    card_header("Bottom line", f"{subject_name} · #{sel.rank} of {sel.n_ranked} · {window}")
     st.markdown(_md(bottom_line(row, sel, history)))
 
 for explanation in explain_all(row, sel, history, result):
-    with st.container(border=True):
+    with card(f"metric_{explanation.key}"):
+        card_header(explanation.title, explanation.meaning)
         left, right = st.columns([1, 3])
-        left.metric(explanation.title, explanation.value)
+        left.html(f'<div class="ds-big">{escape(explanation.value)}</div>')
         with right:
             # lead with this market's numbers and the action; the generic
             # definition is one tap away instead of opening every card
@@ -251,15 +258,15 @@ for explanation in explain_all(row, sel, history, result):
             if context_chart is None:
                 st.caption("Not enough history to chart this.")
             else:
-                st.altair_chart(style_chart(context_chart), width="stretch")
+                show_chart(context_chart)
         with chart_right:
-            st.altair_chart(style_chart(comparison), width="stretch")
+            show_chart(comparison)
 
 pair = _supplier_pair(subject_value, query)
 if pair is not None:
     country, product_level, product_value = pair
-    with st.container(border=True):
-        st.subheader(":material/factory: Where to source it")
+    with card("source"):
+        card_header("Where to source it", "Brazilian states and MAPA-approved plants")
         st.markdown(
             f"See which Brazilian states ship {product_phrase(product_level, product_value)} "
             f"to {country}, and which plants MAPA has approved to export it there."

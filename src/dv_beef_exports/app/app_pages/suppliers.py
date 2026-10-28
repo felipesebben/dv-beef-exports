@@ -18,12 +18,16 @@ from dv_beef_exports.analysis import suppliers
 from dv_beef_exports.app.common import (
     SUPPLIERS_MARKET_KEY,
     SUPPLIERS_PRODUCT_KEY,
+    capitalize,
+    card,
+    card_header,
     connection,
     geo_options,
+    note,
     page_header,
     product_phrase,
     product_scope_options,
-    style_chart,
+    show_chart,
 )
 from dv_beef_exports.app.explain_charts import origin_states_chart
 from dv_beef_exports.app.explanations import supplier_summary
@@ -66,19 +70,17 @@ def _plants_table(plants: pd.DataFrame, listed: bool) -> pd.DataFrame:
     return table
 
 
+con = connection()
+ready = suppliers.has_supplier_data(con)
+as_of = suppliers.snapshot_date(con) if ready else None
 page_header(
-    "Sourcing",
+    f"Find suppliers · MAPA list of {as_of:%d %b %Y}" if as_of else "Find suppliers",
     "Find suppliers",
     "You have a market and a product: which Brazilian states ship it there today, and which "
     "plants MAPA has approved to export it there.",
 )
-
-con = connection()
-if not suppliers.has_supplier_data(con):
-    st.info(
-        "Supplier data isn't in this database yet - it arrives with the next data refresh.",
-        icon=":material/hourglass_empty:",
-    )
+if not ready:
+    note("Supplier data isn't in this database yet - it arrives with the next data refresh.")
     st.stop()
 
 countries = geo_options(con, "country")
@@ -112,83 +114,91 @@ else:
         con, categories=categories, origin=origin, min_markets=PROVEN_EXPORTER_LISTS
     )
 
-with st.container(border=True):
-    st.markdown(_md(supplier_summary(market, product, listing, origin, plants)))
+st.markdown(_md(supplier_summary(market, product, listing, origin, plants)))
 
 if not origin.empty:
-    st.altair_chart(style_chart(origin_states_chart(origin, product, market)), width="stretch")
-    st.caption(
-        "ComexStat records the state where the goods were produced. It has no company "
-        "detail, so a plant's state is a lead, not proof the plant ships this flow."
-    )
-
-st.subheader(
-    "Approved plants" if listing["listed"] else "Proven exporters",
-    help="Plants are listed by MAPA's SIF number. 'On MAPA lists' counts the markets whose "
-    "list carries the plant for this kind of product (a bloc's list counts once) - a sign "
-    "of export experience.",
-)
-if plants.empty:
-    st.info("No plants match.", icon=":material/search_off:")
-else:
-    show_all = listing["listed"] and st.toggle(
-        "Include suspended and expired approvals", value=False, key="suppliers_show_all"
-    )
-    shown = plants if show_all or not listing["listed"] else plants[plants["status"] == "active"]
-    st.dataframe(
-        _plants_table(shown, listing["listed"]),
-        hide_index=True,
-        width="stretch",
-        column_config={
-            "Plant": st.column_config.TextColumn(pinned=True),
-            "State's share": st.column_config.ProgressColumn(
-                "State's share",
-                help=f"Share of the {product} Brazil shipped to {market} in the last 12 months "
-                "that came from the plant's state.",
-                format="percent",
-                min_value=0.0,
-                max_value=1.0,
-            ),
-            "On MAPA lists": st.column_config.NumberColumn(format="%d"),
-            "Approved on": st.column_config.DateColumn(format="DD MMM YYYY"),
-            "Valid until": st.column_config.DateColumn(
-                format="DD MMM YYYY", help="None: the approval has no end date."
-            ),
-            "Search": st.column_config.LinkColumn(
-                "Search", display_text="Web search", help="Find the company's site and contacts"
-            ),
-            "Map": st.column_config.LinkColumn(
-                "Map", display_text="Map", help="The registered address on a map"
-            ),
-        },
-    )
-
-changes = suppliers.recent_changes(con, country=market, categories=categories)
-if not changes.empty:
-    with st.expander(
-        f"Changes in the latest MAPA update ({len(changes)})", icon=":material/update:"
-    ):
-        st.dataframe(
-            changes.rename(
-                columns={
-                    "sif": "SIF",
-                    "plant_name": "Plant",
-                    "product": "Product",
-                    "change": "Change",
-                    "seen_on": "Seen on",
-                }
-            ),
-            hide_index=True,
-            width="stretch",
+    with card("origin"):
+        card_header(
+            "Where it ships from",
+            f"{capitalize(product)} to {market}, by Brazilian state of production, "
+            "latest 12 months",
+        )
+        show_chart(origin_states_chart(origin, product, market))
+        note(
+            "ComexStat records the state where the goods were produced. It has no company "
+            "detail, so a plant's state is a lead, not proof the plant ships this flow."
         )
 
-with st.expander("About this data", icon=":material/info:"):
-    as_of = f"{listing['as_of']:%d %b %Y}" if listing["as_of"] else "unknown"
-    st.markdown(
-        f"""
+with card("plants"):
+    card_header(
+        "Approved plants" if listing["listed"] else "Proven exporters",
+        "By MAPA's SIF number; 'On MAPA lists' counts the markets whose list carries the "
+        "plant for this kind of product - a sign of export experience",
+    )
+    if plants.empty:
+        note("No plants match.")
+    else:
+        show_all = listing["listed"] and st.toggle(
+            "Include suspended and expired approvals", value=False, key="suppliers_show_all"
+        )
+        shown = (
+            plants if show_all or not listing["listed"] else plants[plants["status"] == "active"]
+        )
+        st.dataframe(
+            _plants_table(shown, listing["listed"]),
+            hide_index=True,
+            width="stretch",
+            row_height=40,
+            column_config={
+                "Plant": st.column_config.TextColumn(pinned=True),
+                "State's share": st.column_config.ProgressColumn(
+                    "State's share",
+                    help=f"Share of the {product} Brazil shipped to {market} in the last 12 months "
+                    "that came from the plant's state.",
+                    format="percent",
+                    min_value=0.0,
+                    max_value=1.0,
+                ),
+                "On MAPA lists": st.column_config.NumberColumn(format="%d"),
+                "Approved on": st.column_config.DateColumn(format="DD MMM YYYY"),
+                "Valid until": st.column_config.DateColumn(
+                    format="DD MMM YYYY", help="None: the approval has no end date."
+                ),
+                "Search": st.column_config.LinkColumn(
+                    "Search", display_text="Web search", help="Find the company's site and contacts"
+                ),
+                "Map": st.column_config.LinkColumn(
+                    "Map", display_text="Map", help="The registered address on a map"
+                ),
+            },
+        )
+
+    changes = suppliers.recent_changes(con, country=market, categories=categories)
+    if not changes.empty:
+        with st.expander(
+            f"Changes in the latest MAPA update ({len(changes)})", icon=":material/update:"
+        ):
+            st.dataframe(
+                changes.rename(
+                    columns={
+                        "sif": "SIF",
+                        "plant_name": "Plant",
+                        "product": "Product",
+                        "change": "Change",
+                        "seen_on": "Seen on",
+                    }
+                ),
+                hide_index=True,
+                width="stretch",
+            )
+
+    with st.expander("About this data", icon=":material/info:"):
+        copy_date = f"{listing['as_of']:%d %b %Y}" if listing["as_of"] else "unknown"
+        st.markdown(
+            f"""
 - **Approvals and plants**: MAPA's SIGSIF open data ("Estabelecimentos Nacionais
   Habilitados" and "Estabelecimentos Registrados no SIF", dados.agricultura.gov.br,
-  licence CC-BY), checked weekly; this copy is from **{as_of}**. Each change is kept, so
+  licence CC-BY), checked weekly; this copy is from **{copy_date}**. Each change is kept, so
   approvals and suspensions can be followed over time from now on.
 - **Products**: MAPA approves *kinds* of product (raw, cured, heat-treated), not tariff
   codes. Raw ("em natureza") covers frozen cuts and offal alike, so a plant approved for
@@ -199,4 +209,4 @@ with st.expander("About this data", icon=":material/info:"):
 - **States**: ComexStat exports by state of production, latest 12 months.
 - Contact details are not copied: use the search and map links.
 """
-    )
+        )

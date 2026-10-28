@@ -14,15 +14,19 @@ from dv_beef_exports.app.common import (
     CHART_INK,
     COLUMN_FORMATS,
     COLUMN_LABELS,
-    INK,
     PERCENT_COLUMNS,
     RANKED_COL_LABELS,
+    card,
+    card_header,
     connection,
     display_name,
+    headline,
+    left_labels,
     page_header,
     query_summary,
-    style_chart,
+    show_chart,
 )
+from dv_beef_exports.app.explanations import ranking_note
 
 # Table column order: what a reader needs first (the score, how much to trust
 # it, the size of the trade), then the evidence behind confidence.
@@ -53,7 +57,7 @@ def _opportunity_chart(result: pd.DataFrame, ranked_label: str) -> alt.LayerChar
     base = alt.Chart(top).encode(
         x=alt.X(
             "opportunity_score:Q",
-            title="Opportunity index",
+            title=None,
             scale=alt.Scale(domain=[0, 100]),
             axis=alt.Axis(values=[0, 20, 40, 60, 80, 100]),
         ),
@@ -61,8 +65,8 @@ def _opportunity_chart(result: pd.DataFrame, ranked_label: str) -> alt.LayerChar
             "name:N",
             sort="-x",
             title=None,
-            # country/product names are the data's identity: primary ink
-            axis=alt.Axis(labelColor=INK, domain=False, labelLimit=200),
+            # names read left to right from the card's edge
+            axis=alt.Axis(**left_labels(200)),
         ),
         tooltip=[
             alt.Tooltip("name:N", title=ranked_label),
@@ -79,8 +83,8 @@ def _opportunity_chart(result: pd.DataFrame, ranked_label: str) -> alt.LayerChar
     )
     return (bars + labels).properties(
         title=alt.TitleParams(
-            text="Top 15 by opportunity index",
-            subtitle="Growing, material markets with room left and rising prices rank highest",
+            text="Opportunity index (0-100)",
+            subtitle="Higher = a better lead within this selection",
             anchor="start",
         ),
         height=alt.Step(24),
@@ -139,10 +143,10 @@ def _reading_guide() -> None:
 
 end_year, end_month = latest_period_end(connection())
 page_header(
-    "Ranking",
+    f"Opportunities · data to {date(end_year, end_month, 1):%b %Y}",
     "Opportunities",
     "Where Brazil's beef exports are growing steadily, in material volumes, with room left "
-    f"to grow. Each year is a 12-month period ending {date(end_year, end_month, 1):%b %Y}.",
+    "to grow - each year a full 12-month period.",
 )
 query = st.session_state.query
 st.caption(query_summary(query))
@@ -160,23 +164,33 @@ ranked_col = result.columns[0]
 ranked_label = RANKED_COL_LABELS.get(ranked_col, ranked_col)
 result = result.assign(name=[display_name(ranked_col, v) for v in result[ranked_col]])
 
-st.altair_chart(style_chart(_opportunity_chart(result, ranked_label)), width="stretch")
-st.page_link(
-    "app_pages/explain.py",
-    label="Explain any of these in plain language",
-    icon=":material/lightbulb:",
-)
+with card("top"):
+    card_header(
+        "The 15 best leads",
+        "Ranked by the opportunity index: growth, room left, commercial size and evidence",
+    )
+    headline(ranking_note(result))
+    show_chart(_opportunity_chart(result, ranked_label))
+    st.page_link(
+        "app_pages/explain.py",
+        label="Explain any of these in plain language",
+        icon=":material/lightbulb:",
+    )
 
-st.subheader(f"All {len(result)} results")
-display = result.copy()
-for pct_col in PERCENT_COLUMNS:
-    display[pct_col] = display[pct_col] * 100
-
-st.dataframe(
-    display,
-    width="stretch",
-    hide_index=True,
-    column_order=_TABLE_ORDER,
-    column_config=_column_config(ranked_label),
-)
-_reading_guide()
+with card("all"):
+    card_header(
+        f"All {len(result)} results",
+        "Click a column to sort; hover a column header for what it means",
+    )
+    display = result.copy()
+    for pct_col in PERCENT_COLUMNS:
+        display[pct_col] = display[pct_col] * 100
+    st.dataframe(
+        display,
+        width="stretch",
+        hide_index=True,
+        row_height=40,
+        column_order=_TABLE_ORDER,
+        column_config=_column_config(ranked_label),
+    )
+    _reading_guide()
