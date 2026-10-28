@@ -37,6 +37,7 @@ from dv_beef_exports.app.common import (
     TONS_AXIS_LABELS,
     UP,
     capitalize,
+    left_labels,
     period_label,
 )
 from dv_beef_exports.app.explanations import money, tons
@@ -70,7 +71,7 @@ def _period_x(title: str | None = None) -> alt.X:
         "period:N",
         sort=None,  # chronological (data) order
         title=title,
-        axis=alt.Axis(labelAngle=-40, labelOverlap=True),
+        axis=alt.Axis(labelAngle=0, labelOverlap=True),
     )
 
 
@@ -128,8 +129,8 @@ def comparison_chart(
             sort=order,
             title=None,
             axis=alt.Axis(
-                domain=False,
-                labelLimit=170,
+                # left-aligned like every bar chart; colour set per label below
+                **{k: v for k, v in left_labels(170).items() if k != "labelColor"},
                 labelColor={
                     "condition": {"test": is_subject_label, "value": CHART_INK},
                     "value": CHART_MUTED,
@@ -153,7 +154,7 @@ def comparison_chart(
         x=alt.X(f"{column}:Q", title=metric, axis=alt.Axis(labels=False, grid=False)),
         color=alt.condition(alt.datum.is_subject, alt.value(HIGHLIGHT), alt.value(PEER)),
     )
-    labels = base.mark_text(align="left", dx=4, fontSize=11).encode(
+    labels = base.mark_text(align="left", dx=4).encode(
         x=alt.X("label_at:Q"),
         text="label:N",
         color=alt.condition(alt.datum.is_subject, alt.value(CHART_INK), alt.value(CHART_MUTED)),
@@ -165,7 +166,7 @@ def comparison_chart(
         layers.append(alt.Chart(ref).mark_rule(color=CHART_INK, strokeWidth=1).encode(x="x:Q"))
         layers.append(
             alt.Chart(ref)
-            .mark_text(align="left", dx=3, baseline="top", fontSize=10, color=CHART_INK)
+            .mark_text(align="left", dx=3, baseline="top", color=CHART_INK)
             .encode(x="x:Q", y=alt.value(0), text="text:N")
         )
     return alt.layer(*layers).properties(
@@ -173,7 +174,7 @@ def comparison_chart(
             f"Compared with other {noun_plural}",
             [f"{metric} · top {min(top_n, len(ranked))} of {len(ranked)}", rank_note],
         ),
-        height=alt.Step(20),
+        height=alt.Step(30),
     )
 
 
@@ -210,7 +211,7 @@ def growth_context(history: pd.DataFrame) -> alt.Chart | None:
         .properties(
             title=_title(
                 "Change vs. the previous 12 months",
-                "Each bar: one 12-month period against the one before (blue up, orange down)",
+                "One 12-month period against the one before: up in blue, down in orange",
             ),
             height=HEIGHT,
         )
@@ -227,7 +228,7 @@ def trend_context(history: pd.DataFrame, log_scale: bool) -> alt.LayerChart:
         data = data[data["fob_usd"] > 0]
     y_scale = alt.Scale(type="log") if log_scale else alt.Scale()
     colors = alt.Scale(domain=[_ACTUAL, _NOT_COUNTED, _LINE], range=[HIGHLIGHT, PEER, EMPHASIS])
-    legend = alt.Legend(title=None, orient="top", direction="horizontal", labelLimit=0)
+    legend = alt.Legend(title=None, labelLimit=0)
     tooltip = [
         alt.Tooltip("period:N", title="Period"),
         alt.Tooltip("fob_usd:Q", title="12-month total", format="$,.0f"),
@@ -329,7 +330,7 @@ def coverage_context(history: pd.DataFrame) -> alt.Chart:
                 scale=alt.Scale(
                     domain=[_COUNTED, _TOO_SMALL, _NONE], range=[HIGHLIGHT, BLUE_LIGHT, PEER]
                 ),
-                legend=alt.Legend(title=None, orient="top", direction="horizontal", labelLimit=0),
+                legend=alt.Legend(title=None, labelLimit=0),
             ),
             tooltip=[
                 alt.Tooltip("period:N", title="Period"),
@@ -356,7 +357,7 @@ def volume_context(subject: str, total: float, typical: float, nouns: str) -> al
         }
     )
     base = alt.Chart(data).encode(
-        y=alt.Y("who:N", sort=None, title=None, axis=alt.Axis(domain=False, labelLimit=190)),
+        y=alt.Y("who:N", sort=None, title=None, axis=alt.Axis(**left_labels(190))),
     )
     bars = base.mark_bar(cornerRadiusEnd=3, height={"band": 0.6}).encode(
         x=alt.X(
@@ -395,7 +396,7 @@ def confidence_context(row: pd.Series) -> alt.LayerChart:
         }
     )
     base = alt.Chart(data).encode(
-        y=alt.Y("leg:N", sort=None, title=None, axis=alt.Axis(domain=False)),
+        y=alt.Y("leg:N", sort=None, title=None, axis=alt.Axis(**left_labels(150))),
     )
     bars = base.mark_bar(cornerRadiusEnd=3, height={"band": 0.6}).encode(
         x=alt.X(
@@ -448,7 +449,7 @@ def size_context(history: pd.DataFrame) -> alt.VConcatChart:
     container_rule = alt.Chart(container).mark_rule(color=CHART_INK, strokeWidth=1).encode(y="y:Q")
     container_label = (
         alt.Chart(container)
-        .mark_text(align="left", baseline="bottom", dx=2, dy=-2, fontSize=10, color=CHART_INK)
+        .mark_text(align="left", baseline="bottom", dx=2, dy=-2, color=CHART_INK)
         .encode(x=alt.value(0), y="y:Q", text="text:N")
     )
     weight = (weight + container_rule + container_label).properties(
@@ -484,7 +485,7 @@ def price_context(
     rule = alt.Chart(ref).mark_rule(color=CHART_INK, strokeWidth=1).encode(y="y:Q")
     rule_label = (
         alt.Chart(ref)
-        .mark_text(align="left", baseline="bottom", dx=2, dy=-3, fontSize=10, color=CHART_INK)
+        .mark_text(align="left", baseline="bottom", dx=2, dy=-3, color=CHART_INK)
         .encode(x=alt.value(0), y="y:Q", text="text:N")
     )
     return (line + rule + rule_label).properties(
@@ -547,16 +548,14 @@ def recent_context(history: pd.DataFrame, recent_periods: int = 4) -> alt.Chart 
             scale=alt.Scale(
                 domain=["Up", "Down", "No earlier year to compare"], range=[UP, DOWN, PEER]
             ),
-            legend=alt.Legend(title=None, orient="top", direction="horizontal", labelLimit=0),
+            legend=alt.Legend(title=None, labelLimit=0),
         ),
         tooltip=[
             alt.Tooltip("period:N", title="Period"),
             alt.Tooltip("fob_usd:Q", title="12-month total", format="$,.0f"),
         ],
     )
-    labels = base.mark_text(dy=-6, fontSize=11, color=CHART_INK).encode(
-        y="fob_usd:Q", text="label:N"
-    )
+    labels = base.mark_text(dy=-6, color=CHART_INK).encode(y="fob_usd:Q", text="label:N")
     return (bars + labels).properties(
         title=_title(
             f"The last {len(data)} years",
@@ -578,7 +577,7 @@ def index_breakdown(factors: dict[str, float]) -> alt.LayerChart:
         }
     )
     base = alt.Chart(data).encode(
-        y=alt.Y("factor:N", sort=None, title=None, axis=alt.Axis(domain=False)),
+        y=alt.Y("factor:N", sort=None, title=None, axis=alt.Axis(**left_labels(150))),
     )
     bars = base.mark_bar(cornerRadiusEnd=3, height={"band": 0.6}).encode(
         x=alt.X("value:Q", title="Factor (1 = best)", scale=alt.Scale(domain=[0, 1])),
@@ -628,10 +627,10 @@ def origin_states_chart(origin: pd.DataFrame, product: str, market: str) -> alt.
         else ""
     )
     base = alt.Chart(data).encode(
-        y=alt.Y("state:N", sort=None, title=None, axis=alt.Axis(domain=False, labelLimit=170)),
+        y=alt.Y("state:N", sort=None, title=None, axis=alt.Axis(**left_labels(170))),
     )
     bars = base.mark_bar(cornerRadiusEnd=3, height={"band": 0.7}, color=HIGHLIGHT).encode(
-        x=alt.X("share:Q", title="Share of the value shipped", axis=alt.Axis(format="%")),
+        x=alt.X("share:Q", title=None, axis=alt.Axis(format="%")),
         tooltip=[
             alt.Tooltip("state:N", title="State"),
             alt.Tooltip("share:Q", title="Share", format=".1%"),
@@ -641,8 +640,8 @@ def origin_states_chart(origin: pd.DataFrame, product: str, market: str) -> alt.
     labels = base.mark_text(align="left", dx=4, color=CHART_INK).encode(x="share:Q", text="label:N")
     return (bars + labels).properties(
         title=_title(
-            "Where it ships from",
-            [f"{capitalize(product)} to {market}, by Brazilian state of production", window],
+            "Share of the value shipped, by state (%)",
+            f"{capitalize(product)} to {market} · {window}",
         ),
-        height=alt.Step(26),
+        height=alt.Step(30),
     )

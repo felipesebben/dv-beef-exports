@@ -22,8 +22,12 @@ from dv_beef_exports.app.explanations import (
     growth_drivers,
     implied_typical_size,
     money,
+    monthly_note,
+    movers_note,
     overview_summary,
     plural,
+    price_note,
+    ranking_note,
     share_text,
     stalled_since,
     supplier_summary,
@@ -394,3 +398,58 @@ def test_dependency_note_flags_a_new_top_buyer_and_a_spread_trade() -> None:
 
     assert "taking over from Chile" in text
     assert text.endswith("No single buyer dominates.")
+
+
+def test_monthly_note_compares_the_last_three_months() -> None:
+    monthly = pd.DataFrame(
+        {
+            "month": pd.date_range("2025-10-01", periods=12, freq="MS"),
+            "fob_usd": [10.0] * 9 + [9.0, 8.0, 7.0],
+            "prev_fob_usd": [10.0] * 12,
+        }
+    )
+
+    assert monthly_note(monthly) == (
+        "Jul–Sep 2026: $24, 20% below the same three months a year earlier."
+    )
+
+
+def test_movers_note_names_the_biggest_gain_and_loss() -> None:
+    movers = pd.DataFrame(
+        {"destination": ["United States", "Algeria"], "change": [5.25e8, -5.66e6]}
+    )
+
+    assert movers_note(movers, "destination") == (
+        "United States gained the most (+$525M); Algeria lost the most (-$5.7M)."
+    )
+    assert movers_note(movers.iloc[:0], "destination") == "No destination changed."
+
+
+def test_price_note_reads_the_biggest_buyer_against_the_average() -> None:
+    pv = pd.DataFrame(
+        {
+            "destination": ["China", "United States", "Netherlands"],
+            "unit_price_usd_per_ton": [5964.0, 6450.0, 8859.0],
+            "price_vs_average": [1.064, 1.15, 1.58],
+        }
+    )
+
+    assert price_note(pv, "destination") == (
+        "China pays $5,964/t, 6% above the average; among the 10 biggest destinations, "
+        "Netherlands pays the most ($8,859/t)."
+    )
+
+
+def test_ranking_note_names_the_leader_and_the_evidence() -> None:
+    result = pd.DataFrame(
+        {
+            "name": ["Mexico", "Philippines", "Guyana"],
+            "opportunity_score": [86.0, 73.0, 12.0],
+            "confidence": [0.87, 0.97, 0.6],
+        }
+    )
+
+    assert ranking_note(result) == (
+        "Mexico leads with 86, ahead of Philippines (73); 2 of the top 3 are well evidenced "
+        "(confidence 70%+)."
+    )

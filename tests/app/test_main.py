@@ -119,6 +119,12 @@ def test_reading_guide_expander_renders() -> None:
     assert any("Hover any column header" in m.value for m in at.markdown)
 
 
+def _html(at: AppTest) -> str:
+    """Everything drawn with st.html - the design system's cards, KPI cards,
+    headlines and notes."""
+    return " ".join(element.proto.body for element in at.get("html"))
+
+
 def _explain_page(at: AppTest) -> AppTest:
     at.switch_page("app_pages/explain.py").run(timeout=30)
     return at
@@ -129,9 +135,10 @@ def test_explain_page_renders_bottom_line_and_every_metric() -> None:
 
     assert not at.exception
     assert at.title[0].value == "Explain the numbers"
-    # every metric card has an st.metric
-    assert len(at.metric) == 10  # one card per metric, incl. recent momentum
-    assert any("Bottom line" in s.value for s in at.subheader)
+    html = _html(at)
+    # one card per metric (incl. recent momentum), each with its big number
+    assert html.count('class="ds-big"') == 10
+    assert ">Bottom line</h2>" in html
 
 
 def test_explain_page_uses_the_shared_sidebar_selection() -> None:
@@ -167,7 +174,7 @@ def test_app_opens_on_market_overview_without_the_ranking_sidebar() -> None:
 
     assert not at.exception
     assert at.title[0].value == "Market overview"
-    assert len(at.metric) == 4
+    assert _html(at).count('class="ds-kpi"') == 4
     assert any("came to" in m.value for m in at.markdown)
     # the ranking query doesn't apply here, so its sidebar isn't rendered
     assert len(at.sidebar.selectbox) == 0
@@ -208,14 +215,14 @@ def test_who_buys_what_follows_the_measure_picker() -> None:
     at = _overview()
 
     at.segmented_control(key="overview_measure").set_value("Volume (tons)").run()
-    volume_captions = [c.value for c in at.caption]
+    volume_html = _html(at)
     at.segmented_control(key="overview_measure").set_value("Destinations").run()
-    destination_captions = [c.value for c in at.caption]
+    destination_html = _html(at)
 
     assert not at.exception
-    assert any("biggest destinations by volume" in c for c in volume_captions)
+    assert "biggest destinations by volume" in volume_html
     # a per-cell destination count is meaningless, so the matrix falls back to value
-    assert any("showing value instead" in c for c in destination_captions)
+    assert "showing value." in destination_html
 
 
 def test_ranked_products_show_names_not_ncm_codes() -> None:
@@ -254,7 +261,7 @@ def test_suppliers_page_lists_approved_plants_for_a_listed_market() -> None:
     assert not at.exception
     assert not at.sidebar.selectbox  # the ranking query doesn't apply here
     assert "approved" in at.markdown[0].value
-    assert any(s.value == "Approved plants" for s in at.subheader)
+    assert ">Approved plants</h2>" in _html(at)
     plants = at.dataframe[0].value
     assert {"Plant", "State's share", "Search", "Map"} <= set(plants.columns)
     assert not plants.empty
@@ -267,14 +274,14 @@ def test_suppliers_page_falls_back_to_proven_exporters_for_an_unlisted_market() 
 
     assert not at.exception
     assert "doesn't approve Brazilian plants one by one" in at.markdown[0].value
-    assert any(s.value == "Proven exporters" for s in at.subheader)
+    assert ">Proven exporters</h2>" in _html(at)
     assert "Status" not in at.dataframe[0].value.columns
 
 
 def test_explain_page_offers_find_suppliers_for_a_country_result() -> None:
     at = _explain_page(_rank_markets_for(_app(), LIVERS))
 
-    assert any(s.value.endswith("Where to source it") for s in at.subheader)
+    assert ">Where to source it</h2>" in _html(at)
     assert at.button[-1].label == "Find suppliers"
 
 
@@ -282,10 +289,12 @@ def test_overview_renders_every_analysis_section() -> None:
     at = _overview()
 
     assert not at.exception
-    # the value bridge's and the dependency chart's sentences only render with them
-    captions = " ".join(c.value for c in at.caption)
-    assert "drove it" in captions or "both played a part" in captions
-    assert "of the value in the latest 12 months" in captions
+    # each chart's headline sentence only renders with its chart
+    html = _html(at)
+    assert "drove it" in html or "both played a part" in html
+    assert "of the value in the latest 12 months" in html
+    assert "gained the most" in html
+    assert "above the average" in html or "below the average" in html
 
 
 def test_overview_inside_one_country_breaks_down_by_product() -> None:
@@ -294,4 +303,4 @@ def test_overview_inside_one_country_breaks_down_by_product() -> None:
     at.selectbox(key="overview_market").set_value(("country", "Mexico", mexico)).run()
 
     assert not at.exception
-    assert any("compares products" in c.value for c in at.caption)
+    assert "compares products" in _html(at)

@@ -1,30 +1,38 @@
-# The app's charts and HTML tables are styled for a light background; without
-# this, a phone in dark mode would get light-styled charts on a dark page.
+# The Sebben design system (shared with the company's dw-unify-databases
+# dashboards): cream light theme only, forest chrome, Inter Tight for text and
+# charts, Fraunces for the page title only (set in common.py's stylesheet), no
+# text under 14px. Brand colours are for the chrome; charts keep the validated
+# data palette below (blue = slot 1, orange = slot 2 - also growth vs decline).
 [theme]
 base = "light"
-font = "Roboto:https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap"
-codeFont = "'Roboto Mono':https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500&display=swap"
-baseFontSize = 15
-headingFontWeights = [700, 600, 600, 500, 500, 500]
-headingFontSizes = ["2.1rem", "1.45rem", "1.15rem", "1rem", "0.9rem", "0.8rem"]
+font = "'Inter Tight':https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&display=swap"
+headingFont = "'Inter Tight':https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&display=swap"
+baseFontSize = 16
+headingFontSizes = ["40px", "22px", "16px", "16px", "14px", "14px"]
+headingFontWeights = [400, 600, 600, 600, 600, 600]
 
-primaryColor = "#1c5cab"
-backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#f3f5f8"
-textColor = "#1a1c1e"
-borderColor = "#e3e6eb"
-linkColor = "#1c5cab"
+primaryColor = "#0d4f4a"
+backgroundColor = "#f4efe6"
+secondaryBackgroundColor = "#ebe3d4"
+textColor = "#1a1a1a"
+borderColor = "#d8dcd3"
+linkColor = "#0d4f4a"
 linkUnderline = false
-baseRadius = "10px"
-buttonRadius = "8px"
-showWidgetBorder = false
+baseRadius = "8px"
+buttonRadius = "full"
+showWidgetBorder = true
+showSidebarBorder = true
 
-dataframeHeaderBackgroundColor = "#f3f5f8"
-dataframeBorderColor = "#e3e6eb"
+dataframeHeaderBackgroundColor = "#ebe3d4"
+dataframeBorderColor = "#d8dcd3"
 
-# Colour-blind safe: blue/orange is the up/down pair everywhere (validated with
-# the dataviz skill's checker, CVD dE 24.7). Never green/red for good/bad.
-blueColor = "#1c5cab"
+blueColor = "#2a78d6"
 orangeColor = "#c4521f"
+grayColor = "#6b6b6b"
 chartCategoricalColors = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
 chartSequentialColors = ["#cde2fb", "#b7d3f6", "#9ec5f4", "#6da7ec", "#5598e7", "#3987e5", "#2a78d6", "#256abf", "#184f95", "#0d366b"]
+
+[theme.sidebar]
+backgroundColor = "#faf6ef"
+secondaryBackgroundColor = "#ebe3d4"
+borderColor = "#d8dcd3"

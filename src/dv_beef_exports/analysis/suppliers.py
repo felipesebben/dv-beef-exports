@@ -67,6 +67,11 @@ def has_supplier_data(con: duckdb.DuckDBPyConnection) -> bool:
     return {"staging.sigsif_approvals", "marts.exports_by_state"} <= tables
 
 
+def snapshot_date(con: duckdb.DuckDBPyConnection):
+    """The date of the SIGSIF snapshot the staging tables were built from."""
+    return con.execute("SELECT max(as_of) FROM staging.sigsif_approvals").fetchone()[0]
+
+
 def origin_states(
     con: duckdb.DuckDBPyConnection,
     *,

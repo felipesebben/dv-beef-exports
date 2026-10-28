@@ -92,9 +92,7 @@ def test_origin_chart_folds_the_tail_into_other_states() -> None:
     assert len(rows) == charts.TOP_N + 1
     assert rows[-1]["state"] == "Other states (2)"
     assert rows[-1]["share"] == pytest.approx(0.04)
-    assert (
-        spec["title"]["subtitle"][0] == "Boneless beef to Mexico, by Brazilian state of production"
-    )
+    assert spec["title"]["subtitle"] == "Boneless beef to Mexico · Oct '25–Sep '26"
 
 
 @pytest.mark.parametrize("name", list(_all_charts()))
