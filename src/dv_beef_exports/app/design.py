@@ -22,6 +22,7 @@ strings/specs and are unit-tested; the st.* helpers render them.
 
 from __future__ import annotations
 
+import base64
 from html import escape
 from pathlib import Path
 
@@ -207,7 +208,7 @@ div[class*="st-key-card_"] {{ background: var(--brand-cream-card);
 .ds-big {{ font: 600 32px/40px var(--sans); color: var(--ink-primary); }}
 .ds-kpi .ds-compare {{ font: 400 14px/20px var(--sans); color: var(--ink-primary); }}
 .ds-kpi .ds-detail {{ font: 400 14px/20px var(--sans); color: var(--ink-muted); }}
-.ds-kpi svg {{ display: block; margin-top: 8px; width: 100%; height: 40px; }}
+.ds-kpi .ds-spark {{ display: block; margin: 8px 0 4px; width: 100%; height: 40px; }}
 
 /* tables: the header in warm cream (the theme), text 14px */
 [data-testid="stDataFrame"] {{ font-size: 14px; }}
@@ -276,20 +277,25 @@ def _bold(text: str) -> str:
 
 def sparkline_svg(current: list[float], previous: list[float] | None, label: str) -> str:
     """The KPI sparkline: the last 12 months as a blue line over a grey area
-    for the same months a year earlier, 220 x 40, no axes."""
-    width, height, pad = 220, 40, 3
+    for the same months a year earlier, 220 x 40, no axes. Both share one
+    scale spanning their own range (a dynamic range, as the design system
+    allows for lines), so a price that moves 10% doesn't read as flat."""
+    width, height, pad = 220, 40, 4
     series = [v for v in (*current, *(previous or [])) if v is not None and not pd.isna(v)]
-    top = max(series) if series and max(series) > 0 else 1.0
+    low, high = (min(series), max(series)) if series else (0.0, 1.0)
+    span = (high - low) or (abs(high) or 1.0)
+    # the lowest value sits a little above the bottom, so the area still shows
+    floor = low - span * 0.15
+
+    def y(value: float) -> float:
+        if high == low:  # nothing moved: a flat line through the middle
+            return height / 2
+        value = low if pd.isna(value) else value
+        return round(height - pad - (value - floor) / (high - floor) * (height - 2 * pad), 1)
 
     def points(values: list[float]) -> list[tuple[float, float]]:
         n = max(len(values) - 1, 1)
-        return [
-            (
-                round(i * width / n, 1),
-                round(height - pad - (0 if pd.isna(v) else v) / top * (height - 2 * pad), 1),
-            )
-            for i, v in enumerate(values)
-        ]
+        return [(round(i * width / n, 1), y(v)) for i, v in enumerate(values)]
 
     parts = []
     if previous:
@@ -303,8 +309,24 @@ def sparkline_svg(current: list[float], previous: list[float] | None, label: str
             'stroke-linejoin="round" stroke-linecap="round" />'
         )
     return (
-        f'<svg viewBox="0 0 {width} {height}" preserveAspectRatio="none" role="img" '
-        f'aria-label="{escape(label)}">{"".join(parts)}</svg>'
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" '
+        f'preserveAspectRatio="none" role="img" aria-label="{escape(label)}">'
+        f"{''.join(parts)}</svg>"
+    )
+
+
+SPARKLINE_KEY = "Blue line: the last 12 months. Grey area: the same months a year earlier."
+
+
+def sparkline_img(current: list[float], previous: list[float] | None, label: str) -> str:
+    """The sparkline as an <img> with the SVG inline as a data URI: st.html
+    sanitises the page's HTML and drops inline <svg>, but keeps images. The
+    tooltip says how to read it; the alt text says what it shows."""
+    svg = sparkline_svg(current, previous, label)
+    data = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    return (
+        f'<img class="ds-spark" src="data:image/svg+xml;base64,{data}" '
+        f'alt="{escape(label)}" title="{escape(SPARKLINE_KEY)}" />'
     )
 
 
@@ -331,7 +353,7 @@ def kpi_grid_html(cards: list[dict]) -> str:
             f'<div class="ds-big">{escape(c["value"])}</div>'
             f'<div class="ds-compare" title="{escape(c.get("compare_title", ""))}">'
             f"{escape(c['compare'])}</div>"
-            f"{sparkline_svg(current, previous, spark_label)}"
+            f"{sparkline_img(current, previous, spark_label)}"
             f'<div class="ds-detail">{escape(c.get("detail", ""))}</div>'
             "</div>"
         )

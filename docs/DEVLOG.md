@@ -404,3 +404,7 @@ something worth remembering (see `docs/WORKFLOW.md`).
 - `app/design.py` holds it all; `docs/design-system.md` maps each rule to
   where it lives. Vega can anchor a top legend to the right, Altair's schema
   can't, so `show_chart()` adds that to the compiled spec.
+- Follow-up: the KPI sparklines never showed - `st.html` sanitises its HTML
+  and silently drops inline `<svg>`. They now ship as a data-URI `<img>`
+  (with a tooltip saying how to read them), scaled to their own range so a
+  10% price move doesn't read as a flat line.
