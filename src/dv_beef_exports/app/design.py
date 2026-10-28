@@ -276,11 +276,13 @@ def _bold(text: str) -> str:
 
 
 def sparkline_svg(current: list[float], previous: list[float] | None, label: str) -> str:
-    """The KPI sparkline: the last 12 months as a blue line over a grey area
-    for the same months a year earlier, 220 x 40, no axes. Both share one
+    """The KPI sparkline: the last 12 months as a blue line with a dot per
+    month (the latest larger) over a grey area for the same months a year
+    earlier, 220 x 40, no axes. Both share one
     scale spanning their own range (a dynamic range, as the design system
     allows for lines), so a price that moves 10% doesn't read as flat."""
     width, height, pad = 220, 40, 4
+    side = 5  # room for the first and last dots, which would be cut in half at the edge
     series = [v for v in (*current, *(previous or [])) if v is not None and not pd.isna(v)]
     low, high = (min(series), max(series)) if series else (0.0, 1.0)
     span = (high - low) or (abs(high) or 1.0)
@@ -295,19 +297,30 @@ def sparkline_svg(current: list[float], previous: list[float] | None, label: str
 
     def points(values: list[float]) -> list[tuple[float, float]]:
         n = max(len(values) - 1, 1)
-        return [(round(i * width / n, 1), y(v)) for i, v in enumerate(values)]
+        return [(round(side + i * (width - 2 * side) / n, 1), y(v)) for i, v in enumerate(values)]
 
     parts = []
     if previous:
         pts = points(previous)
         area = " ".join(f"{x},{y}" for x, y in pts)
-        parts.append(f'<polygon points="0,{height} {area} {width},{height}" fill="{GRID}" />')
+        first, last = pts[0][0], pts[-1][0]
+        parts.append(f'<polygon points="{first},{height} {area} {last},{height}" fill="{GRID}" />')
     if current:
-        line = " ".join(f"{x},{y}" for x, y in points(current))
+        pts = points(current)
+        line = " ".join(f"{x},{y}" for x, y in pts)
+        # the image stretches to the card's width: non-scaling strokes keep the
+        # line 2px and the dots round (a dot is a zero-length round-capped stroke,
+        # which - unlike a <circle> - doesn't squash into an oval)
         parts.append(
             f'<polyline points="{line}" fill="none" stroke="{BLUE}" stroke-width="2" '
-            'stroke-linejoin="round" stroke-linecap="round" />'
+            'stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" />'
         )
+        for i, (x, y_) in enumerate(pts):
+            size = 7 if i == len(pts) - 1 else 4  # the latest month stands out
+            parts.append(
+                f'<path class="dot" d="M{x},{y_} l0,0" stroke="{BLUE}" stroke-width="{size}" '
+                'stroke-linecap="round" vector-effect="non-scaling-stroke" />'
+            )
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" '
         f'preserveAspectRatio="none" role="img" aria-label="{escape(label)}">'
@@ -315,7 +328,10 @@ def sparkline_svg(current: list[float], previous: list[float] | None, label: str
     )
 
 
-SPARKLINE_KEY = "Blue line: the last 12 months. Grey area: the same months a year earlier."
+SPARKLINE_KEY = (
+    "Blue line: the last 12 months, one dot per month (the latest is larger). "
+    "Grey area: the same months a year earlier."
+)
 
 
 def sparkline_img(current: list[float], previous: list[float] | None, label: str) -> str:

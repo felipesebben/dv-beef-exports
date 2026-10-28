@@ -23,18 +23,77 @@ The app doesn't rely on the project itself being installed: `main.py` puts
 rather than the working directory. Both verified in a fresh environment
 without the package installed, started from another directory.
 
-## Limiting who can open it
+## Sign-in (who can use the app)
 
-In the app's **Settings -> Sharing**, choose **Only specific people can view
-this app** and invite viewers by email. They sign in with Google (if the
-email is a Google account) or with a single-use link emailed to them.
+Two locks, on purpose:
 
-Worth knowing (Community Cloud docs, checked 2026-10-03):
-- The free tier allows **one private app** at a time.
-- Invited viewers can also see the app's analytics.
-- The data itself is public anyway - it's committed to this public repo -
-  so the viewer list controls who can *use* the app, not who can see the
-  numbers.
+1. **In the app: Google sign-in plus an allowlist** (`app/auth.py`).
+   - Visitors sign in with Google (OpenID Connect, Streamlit's `st.login`);
+     no passwords exist anywhere.
+   - Only verified e-mails on the allowlist, or on an allowed company
+     domain, get in.
+   - Without the settings below the app **stays closed** (fails closed).
+2. **On the platform: Community Cloud private sharing.**
+   - In the app's **Settings -> Sharing**, choose **Only specific people can
+     view this app** and invite the same people.
+   - Streamlit then blocks anyone uninvited before the app even runs.
+   - The free tier allows one private app.
+
+The data itself is public: it's committed to this public repo. These locks
+protect the app (its analysis and supplier pages), not the raw numbers.
+
+### One-time setup: a Google OAuth client
+
+1. **Open the project.** Go to
+   [console.cloud.google.com](https://console.cloud.google.com) and create (or pick)
+   a project.
+2. **Configure the consent screen** under **APIs & Services -> OAuth consent screen**:
+   - **Internal** if everyone signs in with the company's Google Workspace accounts.
+     Only that domain can even try; this is the safest choice.
+   - Otherwise **External**. While it stays in *Testing*, only the test users you list
+     can sign in: a third lock.
+   - App name: "Beef export intelligence"; add your support e-mail.
+3. **Create the client** under **APIs & Services -> Credentials -> Create credentials ->
+   OAuth client ID**:
+   - application type **Web application**;
+   - **Authorized redirect URIs:**
+     - `https://YOUR-APP.streamlit.app/oauth2callback` (the deployed app's URL);
+     - `http://localhost:8501/oauth2callback` (only if you'll test sign-in locally).
+4. **Copy the client ID and secret.**
+5. **Make a cookie secret:**
+   `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
+
+### Add the settings to the deployed app
+
+On share.streamlit.io, open the app's **Settings -> Secrets** and paste the contents of
+`.streamlit/secrets.toml.example` with the real values:
+
+- `redirect_uri`: the app's URL + `/oauth2callback`;
+- `cookie_secret`: the random string from step 5;
+- `client_id`, `client_secret`: from step 4;
+- under `[access]`, the people allowed in: exact addresses in `allowed_emails`, whole
+  company domains in `allowed_domains`.
+  - A domain matches exactly: `sebbeninternational.com.br` admits
+    `ana@sebbeninternational.com.br`.
+  - It does not admit look-alikes or subdomains.
+
+Save. The app restarts. To add or remove someone later, edit `[access]` there: no code
+change, no deploy.
+
+Never commit real values: `.streamlit/secrets.toml` is gitignored, and only the example
+with placeholders lives in the repo.
+
+### Running locally
+
+The app is closed without settings, so for local development switch the gate off:
+
+```bash
+DV_BEEF_EXPORTS_AUTH=off uv run streamlit run src/dv_beef_exports/app/main.py
+```
+
+(PowerShell: `$env:DV_BEEF_EXPORTS_AUTH = "off"` first.) The tests do the same
+(`tests/app/conftest.py`). **Never set it on the deployed app.** To test the real
+sign-in locally instead, copy the example to `.streamlit/secrets.toml` with real values.
 
 ## After a deploy: if a page shows an ImportError, reboot
 

@@ -125,4 +125,13 @@ def test_sparkline_uses_its_own_range_so_small_moves_show() -> None:
 def test_a_flat_sparkline_runs_through_the_middle() -> None:
     svg = design.sparkline_svg([5, 5], [5, 5], "x")
 
-    assert '<polyline points="0.0,20.0 220.0,20.0"' in svg
+    assert '<polyline points="5.0,20.0 215.0,20.0"' in svg
+
+
+def test_sparkline_marks_every_month_with_a_round_dot() -> None:
+    svg = design.sparkline_svg([1, 2, 3], [2, 2, 2], "x")
+
+    dots = svg.split('class="dot"')[1:]
+    assert len(dots) == 3  # one per month of the last 12 (here 3)
+    assert all('vector-effect="non-scaling-stroke"' in d.split("/>")[0] for d in dots)
+    assert 'stroke-width="7"' in dots[-1] and 'stroke-width="4"' in dots[0]  # latest larger
